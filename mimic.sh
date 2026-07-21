@@ -106,14 +106,25 @@ regen_conf() {
 # ---------- 服务管理 ----------
 write_service() {
   case "$INIT" in
+    systemd)
+      # 覆盖上游 mimic@.service：崩溃自动重启（开机自启由 enable 保证）
+      mkdir -p /etc/systemd/system/mimic@.service.d
+      cat > /etc/systemd/system/mimic@.service.d/restart.conf <<'EOF'
+[Service]
+Restart=always
+RestartSec=3
+EOF
+      systemctl daemon-reload 2>/dev/null ;;
     openrc)
+      # supervise-daemon 常驻监管，退出即拉起
       cat > /etc/init.d/faketcp <<'EOF'
 #!/sbin/openrc-run
 description="Mimic faketcp 混淆"
 IFACE="$(cat /etc/mimic/iface 2>/dev/null)"
+supervisor="supervise-daemon"
 command="/usr/bin/mimic"
 command_args="run -F /etc/mimic/${IFACE}.conf ${IFACE}"
-command_background="yes"
+respawn_delay=3
 pidfile="/run/faketcp.pid"
 start_pre() { modprobe mimic 2>/dev/null; return 0; }
 EOF
