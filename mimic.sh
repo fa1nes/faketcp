@@ -257,6 +257,7 @@ cfg_server() {
   echo "$IFACE" > "$CFGDIR/iface"
   touch "$CFGDIR/server.ports"
   p4="$(ifip 4)"; p6="$(ifip 6)"
+  [ -s "$CFGDIR/server.ports" ] && { gen_server_filters "$p4" "$p6"; regen_conf; }
   while :; do
     cls
     sect "服务端端口管理（自动 IPv4/IPv6 双栈）"
