@@ -11,13 +11,24 @@
 
 ```sh
 # 下载 + 赋权 + 运行（root）
-wget -O mimic.sh https://raw.githubusercontent.com/fa1nes/faketcp/main/mimic.sh && chmod +x mimic.sh && sudo ./mimic.sh
+curl -fsSL https://raw.githubusercontent.com/fa1nes/faketcp/main/mimic.sh -o mimic.sh && chmod +x mimic.sh && sudo ./mimic.sh
 ```
 
-或用 curl：
+### 国内加速（GitHub 拉不动时用镜像）
+
+脚本下载用镜像：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/fa1nes/faketcp/main/mimic.sh -o mimic.sh && chmod +x mimic.sh && sudo ./mimic.sh
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/fa1nes/faketcp/main/mimic.sh -o mimic.sh && chmod +x mimic.sh && sudo ./mimic.sh
+```
+
+脚本内部下载二进制默认已走镜像 `https://ghfast.top`。可用环境变量切换或关闭：
+
+```sh
+# 换其它镜像
+GHPROXY=https://gh-proxy.com ./mimic.sh
+# 关闭镜像，直连 GitHub
+GHPROXY= ./mimic.sh
 ```
 
 安装后可在任意目录直接输入 `faketcp` 或 `mimic-manager` 再次进入菜单。

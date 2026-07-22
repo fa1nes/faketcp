@@ -4,6 +4,7 @@ set -u
 REPO="https://github.com/hack3ric/mimic"
 API="https://api.github.com/repos/hack3ric/mimic/releases/latest"
 REL="https://github.com/fa1nes/faketcp/releases/download"
+GHPROXY="${GHPROXY-https://ghfast.top}"
 CFGDIR="/etc/mimic"
 SELF="/usr/bin/mimic-manager"
 
@@ -35,6 +36,11 @@ elif command -v wget >/dev/null 2>&1; then
 else
   die "需要 curl 或 wget"
 fi
+
+dlgh() {
+  [ -n "$GHPROXY" ] && dlo "$GHPROXY/$1" "$2" && [ -s "$2" ] && return 0
+  dlo "$1" "$2"
+}
 
 . /etc/os-release 2>/dev/null || die "无法读取 /etc/os-release"
 case "$ID" in
@@ -82,6 +88,7 @@ regen_conf() {
   IFACE="$(cat "$CFGDIR/iface" 2>/dev/null || echo "$IFACE")"
   conf="$CFGDIR/$IFACE.conf"
   {
+    echo "xdp_mode = skb"
     if [ -f "$CFGDIR/server.filters" ]; then
       while IFS= read -r f; do [ -n "$f" ] && echo "filter = $f"; done < "$CFGDIR/server.filters"
     fi
@@ -104,6 +111,8 @@ Description=Mimic faketcp on %i
 After=network.target
 
 [Service]
+ExecStartPre=-/sbin/modprobe sch_ingress
+ExecStartPre=-/bin/sh -c 'rm -f /run/mimic/*.lock'
 ExecStart=/usr/bin/mimic run -F /etc/mimic/%i.conf %i
 Restart=always
 RestartSec=3
@@ -123,7 +132,7 @@ command_args="run -F /etc/mimic/${IFACE}.conf ${IFACE}"
 supervise_daemon_args="--stdout /var/log/faketcp.log --stderr /var/log/faketcp.log"
 respawn_delay=3
 pidfile="/run/faketcp.pid"
-start_pre() { modprobe mimic 2>/dev/null; return 0; }
+start_pre() { modprobe mimic 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; return 0; }
 EOF
       chmod +x /etc/init.d/faketcp ;;
     procd)
@@ -187,7 +196,7 @@ install_entry() {
 install_deb() {
   am="$(uname -m)"
   info "下载预编译 mimic ($am) ..."
-  dlo "$REL/debian/mimic-debian-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
+  dlgh "$REL/debian/mimic-debian-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
     || die "下载预编译包失败，请先在 Actions 运行 build-debian-mimic 生成"
   chmod +x /usr/bin/mimic
   info "安装运行库 ..."
@@ -197,7 +206,7 @@ install_deb() {
 install_alpine() {
   am="$(uname -m)"
   info "尝试下载预编译 mimic ($am) ..."
-  if dlo "$REL/alpine/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ]; then
+  if dlgh "$REL/alpine/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ]; then
     chmod +x /usr/bin/mimic
     apk add --no-cache libbpf libxdp libffi >/dev/null 2>&1 || true
     ok "已安装预编译 mimic（无需本地编译）"
@@ -221,7 +230,7 @@ install_alpine() {
 install_owrt() {
   am="$(uname -m)"
   info "下载预编译 mimic ($am) ..."
-  dlo "$REL/openwrt/mimic-openwrt-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
+  dlgh "$REL/openwrt/mimic-openwrt-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
     || die "下载预编译包失败，请先在 Actions 运行 build-openwrt-mimic 生成"
   chmod +x /usr/bin/mimic
   info "安装运行库 ..."
