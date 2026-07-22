@@ -221,8 +221,8 @@ install_alpine() {
 install_owrt() {
   am="$(uname -m)"
   info "下载预编译 mimic ($am) ..."
-  dlo "$REL/alpine/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
-    || die "下载预编译包失败，请先在 Actions 运行 build-alpine-mimic 生成"
+  dlo "$REL/openwrt/mimic-openwrt-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
+    || die "下载预编译包失败，请先在 Actions 运行 build-openwrt-mimic 生成"
   chmod +x /usr/bin/mimic
   info "安装运行库 ..."
   opkg update >/dev/null 2>&1 || true
