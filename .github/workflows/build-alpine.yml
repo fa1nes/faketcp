@@ -1,18 +1,14 @@
 name: build-alpine-mimic
 
-# 在 Alpine 容器里编译 mimic 的 musl 二进制（动态链接，无内核模块，kprobe 校验和，剥离 BTF.ext），
-# 发布到名为 alpine 的 Release。此二进制同架构 musl 系统通用（Alpine / OpenWrt / ImmortalWrt x86_64）。
-# 触发：手动 或 每日定时自动同步上游最新 tag。
-
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "mimic 上游分支或 tag（留空=自动取最新 tag）"
+        description: "mimic upstream branch or tag (empty = latest tag)"
         default: ""
         required: false
       force:
-        description: "强制重编（即使版本未变）"
+        description: "force rebuild even if version unchanged"
         default: "false"
         required: false
   schedule:
@@ -43,7 +39,6 @@ jobs:
             [ "$CUR" = "alpine $REF" ] && SKIP=true
           fi
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-          echo "ref=$REF skip=$SKIP"
 
       - name: build in alpine container
         if: steps.ver.outputs.skip != 'true'
@@ -53,7 +48,6 @@ jobs:
           docker run --rm -e REF -v "$PWD":/w -w /w alpine:latest sh -ec '
             apk add --no-cache git make clang gcc pahole bpftool linux-headers \
               elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev
-            # LLVM 工具（含 llvm-strip，被 STRIP_BTF_EXT 调用）：优先 llvm，否则取最高版本 llvm{N}
             apk add --no-cache llvm || apk add --no-cache "$(apk search -q "^llvm[0-9]*$" | sort -V | tail -n1)"
             for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done; export PATH
             command -v llvm-strip

@@ -1,35 +1,33 @@
 #!/bin/sh
-# mimic-manager —— hack3ric/mimic (faketcp) 安装与配置管理脚本
-# 仅用于管理自己的 Linux 设备。上游文档: https://github.com/hack3ric/mimic
 set -u
 
 REPO="https://github.com/hack3ric/mimic"
 API="https://api.github.com/repos/hack3ric/mimic/releases/latest"
-REL="https://github.com/fa1nes/faketcp/releases/download"  # 本仓库 Actions 编译产物
+REL="https://github.com/fa1nes/faketcp/releases/download"
 CFGDIR="/etc/mimic"
 SELF="/usr/bin/mimic-manager"
 
-# ---------- 颜色 ----------
+E="$(printf '\033')"
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-  E="$(printf '\033')"
   R="$E[0m"; B="$E[1m"; RED="$E[31m"; GRN="$E[32m"; YLW="$E[33m"
   BLU="$E[34m"; MAG="$E[35m"; CYN="$E[36m"; GRY="$E[90m"
 else
   R= B= RED= GRN= YLW= BLU= MAG= CYN= GRY=
 fi
-ok()   { printf "%s✓ %s%s\n"  "$GRN" "$*" "$R"; }
-info() { printf "%s» %s%s\n"  "$CYN" "$*" "$R"; }
-warn() { printf "%s! %s%s\n"  "$YLW" "$*" "$R"; }
-sect() { printf "%s%s── %s ──%s\n" "$B" "$MAG" "$*" "$R"; }
+ok()    { printf "%s✓ %s%s\n"  "$GRN" "$*" "$R"; }
+info()  { printf "%s» %s%s\n"  "$CYN" "$*" "$R"; }
+warn()  { printf "%s! %s%s\n"  "$YLW" "$*" "$R"; }
+sect()  { printf "%s%s── %s ──%s\n" "$B" "$MAG" "$*" "$R"; }
+cls()   { [ -t 1 ] && printf '%s[H%s[2J' "$E" "$E"; }
+pause() { printf "\n%s按回车继续...%s" "$GRY" "$R"; read -r _k; }
 
-# ---------- 基础工具 ----------
 die() { printf "%s✗ 错误: %s%s\n" "$RED" "$*" "$R" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "请用 root 运行"
 
 if command -v curl >/dev/null 2>&1; then
   dl()  { curl -fsSL "$1"; }
   dlo() { curl -fsSL "$1" -o "$2"; }
-  dlf() { curl -"$1" -fsSL "$2" 2>/dev/null; }   # 指定 4/6
+  dlf() { curl -"$1" -fsSL "$2" 2>/dev/null; }
 elif command -v wget >/dev/null 2>&1; then
   dl()  { wget -qO- "$1"; }
   dlo() { wget -qO "$2" "$1"; }
@@ -38,7 +36,6 @@ else
   die "需要 curl 或 wget"
 fi
 
-# ---------- 系统识别 ----------
 . /etc/os-release 2>/dev/null || die "无法读取 /etc/os-release"
 case "$ID" in
   debian|ubuntu)        PKG=deb;    INIT=systemd ;;
@@ -61,28 +58,26 @@ IFACE="$(cat "$CFGDIR/iface" 2>/dev/null || default_iface)"
 
 mkdir -p "$CFGDIR"
 
-# ---------- 公网 IP ----------
-pubip() { # $1 = 4 或 6
+pubip() {
   for u in "https://ipv$1.icanhazip.com" "https://api$([ "$1" = 6 ] && echo 64).ipify.org"; do
     v="$(dlf "$1" "$u")"; [ -n "$v" ] && { echo "$v" | tr -d '\r\n'; return; }
   done
   ip -"$1" -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
 }
 
-# ---------- 过滤器辅助 ----------
-fmt() { # $1=local/remote $2=ip $3=port
+fmt() {
   case "$2" in *:*) echo "$1=[$2]:$3" ;; *) echo "$1=$2:$3" ;; esac
 }
-resolve() { # 主机名/IP -> 一个或多个 IP
+resolve() {
   case "$1" in
-    *:*) echo "$1" ;;                                   # IPv6 字面量
-    *[!0-9.]*)                                          # 主机名
+    *:*) echo "$1" ;;
+    *[!0-9.]*)
       if command -v getent >/dev/null 2>&1; then
         getent ahosts "$1" 2>/dev/null | awk '{print $1}' | sort -u
       elif command -v nslookup >/dev/null 2>&1; then
         nslookup "$1" 2>/dev/null | awk '/^Address[: ]/{print $NF}' | grep -v '#'
       else echo "$1"; fi ;;
-    *) echo "$1" ;;                                     # IPv4
+    *) echo "$1" ;;
   esac
 }
 
@@ -90,7 +85,6 @@ regen_conf() {
   IFACE="$(cat "$CFGDIR/iface" 2>/dev/null || echo "$IFACE")"
   conf="$CFGDIR/$IFACE.conf"
   {
-    echo "# 由 mimic-manager 生成，请勿手动编辑过滤器"
     if [ -f "$CFGDIR/server.filters" ]; then
       while IFS= read -r f; do [ -n "$f" ] && echo "filter = $f"; done < "$CFGDIR/server.filters"
     fi
@@ -104,11 +98,9 @@ regen_conf() {
   ok "已生成 $conf"
 }
 
-# ---------- 服务管理 ----------
 write_service() {
   case "$INIT" in
     systemd)
-      # 自建 faketcp@<iface> 单元，不依赖上游 deb 打包的 mimic@.service
       cat > /etc/systemd/system/faketcp@.service <<'EOF'
 [Unit]
 Description=Mimic faketcp on %i
@@ -124,10 +116,9 @@ WantedBy=multi-user.target
 EOF
       systemctl daemon-reload 2>/dev/null ;;
     openrc)
-      # supervise-daemon 常驻监管，退出即拉起
       cat > /etc/init.d/faketcp <<'EOF'
 #!/sbin/openrc-run
-description="Mimic faketcp 混淆"
+description="Mimic faketcp"
 IFACE="$(cat /etc/mimic/iface 2>/dev/null)"
 supervisor="supervise-daemon"
 command="/usr/bin/mimic"
@@ -155,7 +146,7 @@ EOF
   esac
 }
 
-svc() { # start|stop|restart|status|disable
+svc() {
   case "$INIT" in
     systemd)
       case "$1" in
@@ -184,19 +175,16 @@ svc() { # start|stop|restart|status|disable
   esac
 }
 
-# ---------- 版本 ----------
 latest_tag() {
   dl "$API" 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4
 }
 
-# ---------- 安装 ----------
 install_entry() {
   [ "$(readlink -f "$0" 2>/dev/null || echo "$0")" = "$SELF" ] || { cp "$0" "$SELF"; chmod +x "$SELF"; }
   ln -sf mimic-manager /usr/bin/faketcp
 }
 
 install_deb() {
-  # 下载 Actions 预编译的 glibc 二进制（kprobe，无内核模块），免 DKMS 设备端编译
   am="$(uname -m)"
   info "下载预编译 mimic ($am) ..."
   dlo "$REL/debian/mimic-debian-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
@@ -207,12 +195,11 @@ install_deb() {
 }
 
 install_alpine() {
-  # 优先下载 GitHub Actions 预编译的 musl 二进制，省去本地 ~1.5GB 工具链
   am="$(uname -m)"
   info "尝试下载预编译 mimic ($am) ..."
   if dlo "$REL/alpine/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ]; then
     chmod +x /usr/bin/mimic
-    apk add --no-cache libbpf libxdp libffi >/dev/null 2>&1 || true  # 动态链接时的小体积运行库
+    apk add --no-cache libbpf libxdp libffi >/dev/null 2>&1 || true
     ok "已安装预编译 mimic（无需本地编译）"
     return
   fi
@@ -233,19 +220,9 @@ install_alpine() {
 
 install_owrt() {
   am="$(uname -m)"
-  # 1) 优先装 Actions 用官方 SDK 编好的 ipk
-  td="$(mktemp -d)"
-  info "下载预编译 ipk ..."
-  if dlo "$REL/openwrt/mimic-openwrt-$am.ipk" "$td/mimic.ipk" && [ -s "$td/mimic.ipk" ]; then
-    opkg update 2>/dev/null
-    if opkg install "$td/mimic.ipk"; then rm -rf "$td"; ok "已安装 ipk"; return; fi
-    warn "ipk 安装失败，改用通用 musl 二进制"
-  fi
-  rm -rf "$td"
-  # 2) 兜底：同架构 musl 二进制通用（复用 alpine 产物）+ opkg 运行库
-  info "下载通用 musl 二进制 ($am) ..."
+  info "下载预编译 mimic ($am) ..."
   dlo "$REL/alpine/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
-    || die "下载预编译包失败，请先在 Actions 运行对应构建"
+    || die "下载预编译包失败，请先在 Actions 运行 build-alpine-mimic 生成"
   chmod +x /usr/bin/mimic
   info "安装运行库 ..."
   opkg update >/dev/null 2>&1 || true
@@ -266,8 +243,7 @@ do_install() {
   ok "安装完成。管理入口: faketcp / mimic-manager，默认网卡: $IFACE"
 }
 
-# ---------- 配置 ----------
-gen_server_filters() { # $1=IPv4 $2=IPv6，由 server.ports 生成 local= 过滤器
+gen_server_filters() {
   : > "$CFGDIR/server.filters"
   [ -f "$CFGDIR/server.ports" ] || return
   while IFS= read -r port; do
@@ -282,24 +258,30 @@ cfg_server() {
   touch "$CFGDIR/server.ports"
   info "正在获取公网 IP ..."
   p4="$(pubip 4)"; p6="$(pubip 6)"
-  printf "  IPv4: %s%s%s   IPv6: %s%s%s\n" "$GRN" "${p4:-无}" "$R" "$GRN" "${p6:-无}" "$R"
   while :; do
-    sect "服务端端口管理"
-    printf "  %s1%s) 添加   %s2%s) 查看   %s3%s) 删除   %s0%s) 返回\n" \
-      "$GRN" "$R" "$GRN" "$R" "$GRN" "$R" "$YLW" "$R"
+    cls
+    sect "服务端端口管理（自动 IPv4/IPv6 双栈）"
+    printf "  IPv4: %s%s%s   IPv6: %s%s%s\n\n" "$GRN" "${p4:-无}" "$R" "$GRN" "${p6:-无}" "$R"
+    printf "  %s1%s) 添加端口\n" "$GRN" "$R"
+    printf "  %s2%s) 查看端口\n" "$GRN" "$R"
+    printf "  %s3%s) 删除端口\n" "$GRN" "$R"
+    printf "  %s0%s) 返回\n"     "$YLW" "$R"
     printf "%s选择: %s" "$B" "$R"; read -r c
     case "$c" in
       1) printf "UDP 端口: "; read -r port
-         echo "$port" | grep -qE '^[0-9]+$' || { warn "端口须为数字"; continue; }
-         grep -qxF "$port" "$CFGDIR/server.ports" || echo "$port" >> "$CFGDIR/server.ports"
-         gen_server_filters "$p4" "$p6"; regen_conf ;;
+         if echo "$port" | grep -qE '^[0-9]+$'; then
+           grep -qxF "$port" "$CFGDIR/server.ports" || echo "$port" >> "$CFGDIR/server.ports"
+           gen_server_filters "$p4" "$p6"; regen_conf; ok "已添加端口 $port（IPv4/IPv6 双栈）"
+         else warn "端口须为数字"; fi ;;
       2) [ -s "$CFGDIR/server.ports" ] && cat -n "$CFGDIR/server.ports" || echo "（空）" ;;
-      3) [ -s "$CFGDIR/server.ports" ] || { echo "（空）"; continue; }
-         cat -n "$CFGDIR/server.ports"
-         printf "删除第几行: "; read -r n
-         echo "$n" | grep -q '^[0-9]\+$' && { sed -i "${n}d" "$CFGDIR/server.ports"; gen_server_filters "$p4" "$p6"; regen_conf; } ;;
+      3) if [ -s "$CFGDIR/server.ports" ]; then
+           cat -n "$CFGDIR/server.ports"
+           printf "删除第几行: "; read -r n
+           echo "$n" | grep -q '^[0-9]\+$' && { sed -i "${n}d" "$CFGDIR/server.ports"; gen_server_filters "$p4" "$p6"; regen_conf; }
+         else echo "（空）"; fi ;;
       0) break ;;
     esac
+    pause
   done
 }
 
@@ -307,21 +289,26 @@ cfg_client() {
   echo "$IFACE" > "$CFGDIR/iface"
   touch "$CFGDIR/client.list"
   while :; do
+    cls
     sect "客户端远端管理"
-    printf "  %s1%s) 添加   %s2%s) 查看   %s3%s) 删除   %s0%s) 返回\n" \
-      "$GRN" "$R" "$GRN" "$R" "$GRN" "$R" "$YLW" "$R"
+    printf "  %s1%s) 添加远端\n" "$GRN" "$R"
+    printf "  %s2%s) 查看远端\n" "$GRN" "$R"
+    printf "  %s3%s) 删除远端\n" "$GRN" "$R"
+    printf "  %s0%s) 返回\n"     "$YLW" "$R"
     printf "%s选择: %s" "$B" "$R"; read -r c
     case "$c" in
       1) printf "远端 IP 或域名: "; read -r host
          printf "端口: "; read -r port
          [ -n "$host" ] && [ -n "$port" ] && { echo "$host $port" >> "$CFGDIR/client.list"; regen_conf; } ;;
       2) [ -s "$CFGDIR/client.list" ] && cat -n "$CFGDIR/client.list" || echo "（空）" ;;
-      3) [ -s "$CFGDIR/client.list" ] || { echo "（空）"; continue; }
-         cat -n "$CFGDIR/client.list"
-         printf "删除第几行: "; read -r n
-         echo "$n" | grep -q '^[0-9]\+$' && { sed -i "${n}d" "$CFGDIR/client.list"; regen_conf; } ;;
+      3) if [ -s "$CFGDIR/client.list" ]; then
+           cat -n "$CFGDIR/client.list"
+           printf "删除第几行: "; read -r n
+           echo "$n" | grep -q '^[0-9]\+$' && { sed -i "${n}d" "$CFGDIR/client.list"; regen_conf; }
+         else echo "（空）"; fi ;;
       0) break ;;
     esac
+    pause
   done
 }
 
@@ -336,7 +323,6 @@ view_cfg() {
   [ -f "$CFGDIR/$IFACE.conf" ] && cat "$CFGDIR/$IFACE.conf" || echo "（未生成）"
 }
 
-# ---------- 更新 ----------
 do_update() {
   cur="$(cat "$CFGDIR/version" 2>/dev/null || echo 无)"
   new="$(latest_tag)"
@@ -347,7 +333,6 @@ do_update() {
   case "$a" in y|Y) do_install ;; *) echo "已取消" ;; esac
 }
 
-# ---------- 卸载 ----------
 do_uninstall() {
   printf "%s将删除 mimic 及 %s 下全部配置与服务，确认? [y/N] %s" "$RED" "$CFGDIR" "$R"; read -r a
   case "$a" in y|Y) ;; *) echo "已取消"; return ;; esac
@@ -359,19 +344,17 @@ do_uninstall() {
   esac
   if [ "$INIT" = systemd ]; then
     rm -f /etc/systemd/system/faketcp@.service
-    rm -rf /etc/systemd/system/mimic@.service.d
     systemctl daemon-reload 2>/dev/null
   fi
-  rm -f /etc/init.d/faketcp /etc/modules-load.d/mimic.conf
+  rm -f /etc/init.d/faketcp
   rm -rf "$CFGDIR"
   rm -f /usr/bin/faketcp "$SELF"
   ok "已完全卸载（未改动防火墙及其他配置）"
 }
 
-# ---------- 菜单 ----------
 menu() {
   while :; do
-    echo
+    cls
     printf "%s%s===== mimic-manager =====%s\n" "$B" "$BLU" "$R"
     printf "%s系统: %s/%s  服务: %s%s\n\n" "$GRY" "$ID" "$ARCH" "$INIT" "$R"
     printf "  %s1%s) 安装\n"       "$GRN" "$R"
@@ -400,6 +383,7 @@ menu() {
       0) exit 0 ;;
       *) warn "无效选择" ;;
     esac
+    pause
   done
 }
 

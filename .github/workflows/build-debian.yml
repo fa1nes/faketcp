@@ -1,18 +1,14 @@
 name: build-debian-mimic
 
-# 在 Debian 容器里编译 mimic 的 glibc 二进制（动态链接，无内核模块，kprobe 校验和），
-# 发布到名为 debian 的 Release，供 Debian/Ubuntu 直接下载，免去设备端 DKMS 编译。
-# 触发：手动 或 每日定时自动同步上游最新 tag。
-
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "mimic 上游分支或 tag（留空=自动取最新 tag）"
+        description: "mimic upstream branch or tag (empty = latest tag)"
         default: ""
         required: false
       force:
-        description: "强制重编（即使版本未变）"
+        description: "force rebuild even if version unchanged"
         default: "false"
         required: false
   schedule:
@@ -25,7 +21,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 解析上游版本
+      - name: resolve upstream version
         id: ver
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,9 +39,8 @@ jobs:
             [ "$CUR" = "debian $REF" ] && SKIP=true
           fi
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-          echo "ref=$REF skip=$SKIP"
 
-      - name: 在 Debian bookworm 容器内编译
+      - name: build in debian container
         if: steps.ver.outputs.skip != 'true'
         env:
           REF: ${{ steps.ver.outputs.ref }}
