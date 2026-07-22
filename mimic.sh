@@ -192,19 +192,23 @@ install_deb() {
   info "获取官方 Release ..."
   json="$(dl "$API")" || die "获取 Release 失败"
   urls="$(printf '%s\n' "$json" | grep -o 'https://[^"]*\.deb')"
-  # 仅装 CLI，不装 mimic-dkms（内核模块只用于校验和补丁，最省性能、不随内核重编译）
-  cli="$(printf '%s\n' "$urls" | grep -E "/${cn}_mimic_[0-9][^\"]*_${ARCH}\.deb$" | head -1)"
-  [ -n "$cli" ] || die "未找到匹配 $cn/$ARCH 的官方 deb 包"
+  # 官方 mimic 包硬依赖 mimic-modules，只能由 mimic-dkms 提供，故两者都装
+  cli="$(printf  '%s\n' "$urls" | grep -E "/${cn}_mimic_[0-9][^\"]*_${ARCH}\.deb$"       | head -1)"
+  dkms="$(printf '%s\n' "$urls" | grep -E "/${cn}_mimic-dkms_[0-9][^\"]*_${ARCH}\.deb$" | head -1)"
+  [ -n "$cli" ] && [ -n "$dkms" ] || die "未找到匹配 $cn/$ARCH 的官方 deb 包"
   td="$(mktemp -d)"
-  info "下载 $(basename "$cli") ..."
-  dlo "$cli" "$td/mimic.deb" || { rm -rf "$td"; die "下载失败"; }
-  apt-get install -y "$td/mimic.deb" || { rm -rf "$td"; die "安装失败"; }
+  info "下载 mimic 与 mimic-dkms ..."
+  dlo "$cli" "$td/mimic.deb" && dlo "$dkms" "$td/mimic-dkms.deb" || { rm -rf "$td"; die "下载失败"; }
+  apt-get install -y "$td/mimic.deb" "$td/mimic-dkms.deb" || { rm -rf "$td"; die "安装失败"; }
   rm -rf "$td"
 }
 
 install_alpine() {
+  # eBPF 编译需 LLVM/clang 工具链（约 1.5GB），空间不足先提示，避免解压中途失败
+  avail="$(df -k / 2>/dev/null | awk 'NR==2{print int($4/1024)}')"
+  [ -n "$avail" ] && [ "$avail" -lt 1500 ] && \
+    die "磁盘可用空间不足：当前 ${avail}MB，编译工具链约需 1500MB。请先清理或扩容后重试"
   info "安装编译依赖 ..."
-  # 依赖对齐上游 building.md：clang 自带所需 llvm 运行库，无需独立的巨型 llvm 工具包
   apk add --no-cache git make clang gcc pahole bpftool linux-headers \
     elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev || die "依赖安装失败"
   info "克隆并编译源码 ..."
