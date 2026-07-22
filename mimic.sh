@@ -44,13 +44,6 @@ install_bin() {
   mv -f "$tmp" /usr/bin/mimic
 }
 
-fetch_src() {
-  rm -rf "$1"; mkdir -p "$1"
-  dlgh "$REPO/archive/refs/heads/master.tar.gz" /tmp/mimic-src.tgz \
-    && tar -xzf /tmp/mimic-src.tgz -C "$1" --strip-components=1
-  r=$?; rm -f /tmp/mimic-src.tgz; return $r
-}
-
 . /etc/os-release 2>/dev/null || die "无法读取 /etc/os-release"
 case "$ID" in
   debian|ubuntu)        PKG=deb;    INIT=systemd ;;
@@ -127,7 +120,7 @@ command_args="run -F /etc/mimic/${IFACE}.conf ${IFACE}"
 supervise_daemon_args="--stdout /var/log/faketcp.log --stderr /var/log/faketcp.log"
 respawn_delay=3
 pidfile="/run/faketcp.pid"
-start_pre() { ethtool -K "${IFACE}" tx off gro off lro off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
+start_pre() { modprobe mimic 2>/dev/null; lsmod | grep -q "^mimic " || ethtool -K "${IFACE}" tx off gro off lro off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
 EOF
       chmod +x /etc/init.d/faketcp ;;
     procd)
@@ -138,7 +131,8 @@ STOP=10
 USE_PROCD=1
 start_service() {
   local iface; iface="$(cat /etc/mimic/iface 2>/dev/null)"
-  ethtool -K "$iface" tx off gro off lro off 2>/dev/null
+  modprobe mimic 2>/dev/null
+  lsmod | grep -q "^mimic " || ethtool -K "$iface" tx off gro off lro off 2>/dev/null
   procd_open_instance
   procd_set_param command /usr/bin/mimic run -F "/etc/mimic/${iface}.conf" "${iface}"
   procd_set_param respawn
@@ -215,25 +209,20 @@ install_deb() {
 }
 
 install_alpine() {
-  info "尝试下载预编译 mimic ..."
-  if install_bin "$(bin_url)"; then
-    apk add --no-cache libbpf libxdp libffi ethtool >/dev/null 2>&1 || true
-    ok "已安装预编译 mimic（无需本地编译）"
-    return
+  am="$(uname -m)"
+  info "下载官方 kfunc 二进制 ..."
+  install_bin "$REL/alpine/mimic-alpine-$am" || die "下载失败，请先在 Actions 运行 build-alpine-mimic 生成"
+  apk add --no-cache libbpf libxdp libffi ethtool >/dev/null 2>&1 || true
+  info "下载匹配内核的 kfunc 模块 ..."
+  km="/lib/modules/$(uname -r)/extra/mimic.ko"
+  mkdir -p "$(dirname "$km")"
+  if dlgh "$REL/alpine/mimic-$(uname -r).ko" "$km" && [ -s "$km" ]; then
+    depmod 2>/dev/null
+    modprobe mimic 2>/dev/null && ok "kfunc 模块已加载（满速）" || warn "模块加载失败"
+  else
+    rm -f "$km"
+    warn "无匹配 $(uname -r) 的模块，请 apk upgrade+reboot 到最新内核并重跑 CI；暂用 ethtool 兜底"
   fi
-  warn "无预编译包，回退本地源码编译（约需 1.5GB 空间）"
-  avail="$(df -k / 2>/dev/null | awk 'NR==2{print int($4/1024)}')"
-  [ -n "$avail" ] && [ "$avail" -lt 1500 ] && \
-    die "磁盘不足：当前 ${avail}MB，编译工具链约需 1500MB。请扩容，或用 GitHub Actions 生成预编译包"
-  info "安装编译依赖 ..."
-  apk add --no-cache git make clang gcc pahole bpftool linux-headers \
-    elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev || die "依赖安装失败"
-  info "下载并编译源码 ..."
-  fetch_src /usr/src/mimic || die "源码下载失败"
-  sed -i "s/if (padding_len > 0)/if (0)/" /usr/src/mimic/bpf/egress.c 2>/dev/null
-  make -C /usr/src/mimic build-cli CHECKSUM_HACK=kprobe || die "编译失败"
-  [ -s /usr/src/mimic/out/mimic ] || die "未找到编译产物 out/mimic"
-  rm -f /usr/bin/mimic; install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic
 }
 
 install_owrt() {
