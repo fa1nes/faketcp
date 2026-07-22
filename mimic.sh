@@ -5,7 +5,7 @@ set -u
 
 REPO="https://github.com/hack3ric/mimic"
 API="https://api.github.com/repos/hack3ric/mimic/releases/latest"
-PREBUILT="https://github.com/fa1nes/faketcp/releases/download/alpine"  # Actions 编译的 Alpine 二进制
+REL="https://github.com/fa1nes/faketcp/releases/download"  # 本仓库 Actions 编译产物
 CFGDIR="/etc/mimic"
 SELF="/usr/bin/mimic-manager"
 
@@ -108,12 +108,19 @@ regen_conf() {
 write_service() {
   case "$INIT" in
     systemd)
-      # 覆盖上游 mimic@.service：崩溃自动重启（开机自启由 enable 保证）
-      mkdir -p /etc/systemd/system/mimic@.service.d
-      cat > /etc/systemd/system/mimic@.service.d/restart.conf <<'EOF'
+      # 自建 faketcp@<iface> 单元，不依赖上游 deb 打包的 mimic@.service
+      cat > /etc/systemd/system/faketcp@.service <<'EOF'
+[Unit]
+Description=Mimic faketcp on %i
+After=network.target
+
 [Service]
+ExecStart=/usr/bin/mimic run -F /etc/mimic/%i.conf %i
 Restart=always
 RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
 EOF
       systemctl daemon-reload 2>/dev/null ;;
     openrc)
@@ -152,11 +159,11 @@ svc() { # start|stop|restart|status|disable
   case "$INIT" in
     systemd)
       case "$1" in
-        start)   systemctl enable --now "mimic@$IFACE" ;;
-        stop)    systemctl stop "mimic@$IFACE" ;;
-        restart) systemctl restart "mimic@$IFACE" ;;
-        status)  systemctl status "mimic@$IFACE" ;;
-        disable) systemctl disable --now "mimic@$IFACE" 2>/dev/null ;;
+        start)   systemctl enable --now "faketcp@$IFACE" ;;
+        stop)    systemctl stop "faketcp@$IFACE" ;;
+        restart) systemctl restart "faketcp@$IFACE" ;;
+        status)  systemctl status "faketcp@$IFACE" ;;
+        disable) systemctl disable --now "faketcp@$IFACE" 2>/dev/null ;;
       esac ;;
     openrc)
       case "$1" in
@@ -189,26 +196,21 @@ install_entry() {
 }
 
 install_deb() {
-  cn="$VERSION_CODENAME"
-  info "获取官方 Release ..."
-  json="$(dl "$API")" || die "获取 Release 失败"
-  urls="$(printf '%s\n' "$json" | grep -o 'https://[^"]*\.deb')"
-  # 官方 mimic 包硬依赖 mimic-modules，只能由 mimic-dkms 提供，故两者都装
-  cli="$(printf  '%s\n' "$urls" | grep -E "/${cn}_mimic_[0-9][^\"]*_${ARCH}\.deb$"       | head -1)"
-  dkms="$(printf '%s\n' "$urls" | grep -E "/${cn}_mimic-dkms_[0-9][^\"]*_${ARCH}\.deb$" | head -1)"
-  [ -n "$cli" ] && [ -n "$dkms" ] || die "未找到匹配 $cn/$ARCH 的官方 deb 包"
-  td="$(mktemp -d)"
-  info "下载 mimic 与 mimic-dkms ..."
-  dlo "$cli" "$td/mimic.deb" && dlo "$dkms" "$td/mimic-dkms.deb" || { rm -rf "$td"; die "下载失败"; }
-  apt-get install -y "$td/mimic.deb" "$td/mimic-dkms.deb" || { rm -rf "$td"; die "安装失败"; }
-  rm -rf "$td"
+  # 下载 Actions 预编译的 glibc 二进制（kprobe，无内核模块），免 DKMS 设备端编译
+  am="$(uname -m)"
+  info "下载预编译 mimic ($am) ..."
+  dlo "$REL/debian/mimic-debian-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
+    || die "下载预编译包失败，请先在 Actions 运行 build-debian-mimic 生成"
+  chmod +x /usr/bin/mimic
+  info "安装运行库 ..."
+  apt-get install -y --no-install-recommends libbpf1 libxdp1 >/dev/null 2>&1 || true
 }
 
 install_alpine() {
   # 优先下载 GitHub Actions 预编译的 musl 二进制，省去本地 ~1.5GB 工具链
   am="$(uname -m)"
   info "尝试下载预编译 mimic ($am) ..."
-  if dlo "$PREBUILT/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ]; then
+  if dlo "$REL/alpine/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ]; then
     chmod +x /usr/bin/mimic
     apk add --no-cache libbpf libxdp libffi >/dev/null 2>&1 || true  # 动态链接时的小体积运行库
     ok "已安装预编译 mimic（无需本地编译）"
@@ -230,9 +232,17 @@ install_alpine() {
 }
 
 install_owrt() {
-  info "更新软件源 ..."
+  # 优先装 Actions 预编译的 userspace ipk（kprobe，无 kmod，免内核 vermagic 匹配）
+  td="$(mktemp -d)"
+  info "下载预编译 ipk ..."
+  if dlo "$REL/openwrt/mimic-openwrt-$(uname -m).ipk" "$td/mimic.ipk" && [ -s "$td/mimic.ipk" ]; then
+    opkg update 2>/dev/null
+    opkg install "$td/mimic.ipk" || { rm -rf "$td"; die "ipk 安装失败（依赖缺失，请检查软件源）"; }
+    rm -rf "$td"; return
+  fi
+  rm -rf "$td"
+  warn "无预编译 ipk，回退官方 opkg 源（需内核匹配，不强装）..."
   opkg update || die "opkg update 失败"
-  # 仅安装与当前内核匹配的包，不使用任何 --force，内核不匹配时 opkg 会自行拒绝
   opkg install kmod-mimic mimic || die "opkg 安装失败（可能内核不匹配或缺少软件源）"
 }
 
@@ -314,11 +324,15 @@ do_uninstall() {
   case "$a" in y|Y) ;; *) echo "已取消"; return ;; esac
   svc disable
   case "$PKG" in
-    deb)    apt-get purge -y mimic mimic-dkms 2>/dev/null ;;
-    owrt)   opkg remove mimic kmod-mimic 2>/dev/null ;;
-    alpine) rm -f /usr/bin/mimic; rm -rf /usr/src/mimic
-            rm -f "/lib/modules/$(uname -r)/extra/mimic.ko" 2>/dev/null; depmod 2>/dev/null ;;
+    deb)    apt-get purge -y mimic mimic-dkms 2>/dev/null; rm -f /usr/bin/mimic ;;
+    owrt)   opkg remove mimic kmod-mimic 2>/dev/null; rm -f /usr/bin/mimic ;;
+    alpine) rm -f /usr/bin/mimic; rm -rf /usr/src/mimic ;;
   esac
+  if [ "$INIT" = systemd ]; then
+    rm -f /etc/systemd/system/faketcp@.service
+    rm -rf /etc/systemd/system/mimic@.service.d
+    systemctl daemon-reload 2>/dev/null
+  fi
   rm -f /etc/init.d/faketcp /etc/modules-load.d/mimic.conf
   rm -rf "$CFGDIR"
   rm -f /usr/bin/faketcp "$SELF"

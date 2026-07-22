@@ -1,0 +1,54 @@
+name: build-debian-mimic
+
+# 在 Debian 容器里编译 mimic 的 glibc 二进制（动态链接，无内核模块，kprobe 校验和），
+# 发布到名为 debian 的 Release，供 Debian/Ubuntu 直接下载，免去设备端 DKMS 编译。
+# 触发：手动 或 每日定时自动同步上游最新 tag。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "mimic 上游分支或 tag（留空=自动取最新 tag）"
+        default: ""
+        required: false
+  schedule:
+    - cron: "10 4 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 解析上游版本
+        id: ver
+        run: |
+          REF="${{ github.event.inputs.ref }}"
+          [ -n "$REF" ] || REF="$(git ls-remote --tags --refs --sort=-v:refname \
+            https://github.com/hack3ric/mimic 'v*' | head -n1 | sed 's#.*/##')"
+          [ -n "$REF" ] || REF="master"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - name: 在 Debian bookworm 容器内编译
+        env:
+          REF: ${{ steps.ver.outputs.ref }}
+        run: |
+          docker run --rm -e REF -v "$PWD":/w -w /w debian:bookworm bash -ec '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y --no-install-recommends git make clang llvm gcc pkg-config \
+              libbpf-dev libelf-dev zlib1g-dev libxdp-dev bpftool dwarves libffi-dev ca-certificates
+            git clone --depth 1 -b "$REF" https://github.com/hack3ric/mimic src
+            make -C src build-cli CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1
+            cp src/out/mimic "mimic-debian-$(uname -m)"
+            ls -la "mimic-debian-$(uname -m)"
+          '
+
+      - name: 发布到 debian Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debian
+          name: Debian/glibc 预编译二进制
+          body: "mimic glibc 二进制（动态链接，kprobe，无内核模块）。上游：${{ steps.ver.outputs.ref }}"
+          files: mimic-debian-*

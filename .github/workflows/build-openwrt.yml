@@ -1,0 +1,47 @@
+name: build-openwrt-mimic
+
+# 用 OpenWrt SDK 编译 mimic 的 userspace ipk（kprobe，不含内核模块，免 vermagic 匹配），
+# 发布到名为 openwrt 的 Release。仅 userspace，故 OpenWrt/ImmortalWrt x86_64 通用。
+# 触发：手动（可在下方 sdk 输入里换成你的确切版本）或每日定时。
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk:
+        description: "OpenWrt SDK 镜像（按你的实际版本填写）"
+        default: "openwrt/sdk:x86-64-24.10.0"
+        required: false
+  schedule:
+    - cron: "20 4 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 在 OpenWrt SDK 内编译 userspace ipk
+        env:
+          SDK: ${{ github.event.inputs.sdk }}
+        run: |
+          IMG="${SDK:-openwrt/sdk:x86-64-24.10.0}"
+          docker run --name owrt "$IMG" sh -ec '
+            cd /builder
+            echo "src-git mimic https://github.com/hack3ric/mimic;openwrt" >> feeds.conf.default
+            ./scripts/feeds update -a
+            ./scripts/feeds install mimic
+            make defconfig
+            make package/mimic/compile V=s
+            cp "$(find bin -name "mimic_*.ipk" | head -n1)" /builder/mimic-openwrt-x86_64.ipk
+          '
+          docker cp owrt:/builder/mimic-openwrt-x86_64.ipk .
+          docker rm owrt
+
+      - name: 发布到 openwrt Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: openwrt
+          name: OpenWrt 预编译 ipk
+          body: "mimic userspace ipk（kprobe，无内核模块，x86_64）。SDK：${{ github.event.inputs.sdk }}"
+          files: mimic-openwrt-*.ipk
