@@ -113,7 +113,7 @@ Description=Mimic faketcp on %i
 After=network.target
 
 [Service]
-ExecStartPre=-/bin/sh -c 'modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock; true'
+ExecStartPre=-/bin/sh -c 'ethtool -K %i tx off rx off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock; true'
 ExecStart=/usr/bin/mimic run -F /etc/mimic/%i.conf %i
 Restart=always
 RestartSec=3
@@ -133,7 +133,7 @@ command_args="run -F /etc/mimic/${IFACE}.conf ${IFACE}"
 supervise_daemon_args="--stdout /var/log/faketcp.log --stderr /var/log/faketcp.log"
 respawn_delay=3
 pidfile="/run/faketcp.pid"
-start_pre() { modprobe mimic 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
+start_pre() { ethtool -K "${IFACE}" tx off rx off 2>/dev/null; modprobe mimic 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
 EOF
       chmod +x /etc/init.d/faketcp ;;
     procd)
@@ -144,6 +144,7 @@ STOP=10
 USE_PROCD=1
 start_service() {
   local iface; iface="$(cat /etc/mimic/iface 2>/dev/null)"
+  ethtool -K "$iface" tx off rx off 2>/dev/null
   procd_open_instance
   procd_set_param command /usr/bin/mimic run -F "/etc/mimic/${iface}.conf" "${iface}"
   procd_set_param respawn
@@ -198,13 +199,13 @@ install_deb() {
   info "下载预编译 mimic ..."
   install_bin "$(bin_url)" || die "下载预编译包失败，请先在 Actions 运行 build-debian-mimic 生成"
   info "安装运行库 ..."
-  apt-get install -y --no-install-recommends libbpf1 libxdp1 >/dev/null 2>&1 || true
+  apt-get install -y --no-install-recommends libbpf1 libxdp1 ethtool >/dev/null 2>&1 || true
 }
 
 install_alpine() {
   info "尝试下载预编译 mimic ..."
   if install_bin "$(bin_url)"; then
-    apk add --no-cache libbpf libxdp libffi >/dev/null 2>&1 || true
+    apk add --no-cache libbpf libxdp libffi ethtool >/dev/null 2>&1 || true
     ok "已安装预编译 mimic（无需本地编译）"
     return
   fi
@@ -229,7 +230,7 @@ install_owrt() {
   install_bin "$(bin_url)" || die "下载预编译包失败，请先在 Actions 运行 build-openwrt-mimic 生成"
   info "安装运行库 ..."
   opkg update >/dev/null 2>&1 || true
-  opkg install libbpf libxdp libffi >/dev/null 2>&1 \
+  opkg install libbpf libxdp libffi ethtool >/dev/null 2>&1 \
     || warn "运行库可能不全，若无法启动请手动 opkg install libbpf libxdp"
 }
 
