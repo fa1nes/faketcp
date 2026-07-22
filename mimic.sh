@@ -42,6 +42,13 @@ dlgh() {
   dlo "$1" "$2"
 }
 
+install_bin() {
+  tmp="/usr/bin/.mimic.new"
+  dlgh "$1" "$tmp" && [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
+  chmod +x "$tmp"
+  mv -f "$tmp" /usr/bin/mimic
+}
+
 . /etc/os-release 2>/dev/null || die "无法读取 /etc/os-release"
 case "$ID" in
   debian|ubuntu)        PKG=deb;    INIT=systemd ;;
@@ -196,9 +203,8 @@ install_entry() {
 install_deb() {
   am="$(uname -m)"
   info "下载预编译 mimic ($am) ..."
-  dlgh "$REL/debian/mimic-debian-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
+  install_bin "$REL/debian/mimic-debian-$am" \
     || die "下载预编译包失败，请先在 Actions 运行 build-debian-mimic 生成"
-  chmod +x /usr/bin/mimic
   info "安装运行库 ..."
   apt-get install -y --no-install-recommends libbpf1 libxdp1 >/dev/null 2>&1 || true
 }
@@ -206,13 +212,11 @@ install_deb() {
 install_alpine() {
   am="$(uname -m)"
   info "尝试下载预编译 mimic ($am) ..."
-  if dlgh "$REL/alpine/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ]; then
-    chmod +x /usr/bin/mimic
+  if install_bin "$REL/alpine/mimic-alpine-$am"; then
     apk add --no-cache libbpf libxdp libffi >/dev/null 2>&1 || true
     ok "已安装预编译 mimic（无需本地编译）"
     return
   fi
-  rm -f /usr/bin/mimic
   warn "无预编译包，回退本地源码编译（约需 1.5GB 空间）"
   avail="$(df -k / 2>/dev/null | awk 'NR==2{print int($4/1024)}')"
   [ -n "$avail" ] && [ "$avail" -lt 1500 ] && \
@@ -224,15 +228,15 @@ install_alpine() {
   rm -rf /usr/src/mimic
   git clone --depth 1 "$REPO" /usr/src/mimic || die "克隆失败"
   make -C /usr/src/mimic build-cli CHECKSUM_HACK=kprobe || die "编译失败"
-  install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic || die "未找到编译产物 out/mimic"
+  [ -s /usr/src/mimic/out/mimic ] || die "未找到编译产物 out/mimic"
+  rm -f /usr/bin/mimic; install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic
 }
 
 install_owrt() {
   am="$(uname -m)"
   info "下载预编译 mimic ($am) ..."
-  dlgh "$REL/openwrt/mimic-openwrt-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
+  install_bin "$REL/openwrt/mimic-openwrt-$am" \
     || die "下载预编译包失败，请先在 Actions 运行 build-openwrt-mimic 生成"
-  chmod +x /usr/bin/mimic
   info "安装运行库 ..."
   opkg update >/dev/null 2>&1 || true
   opkg install libbpf libxdp libffi >/dev/null 2>&1 \
