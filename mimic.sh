@@ -5,6 +5,7 @@ set -u
 
 REPO="https://github.com/hack3ric/mimic"
 API="https://api.github.com/repos/hack3ric/mimic/releases/latest"
+PREBUILT="https://github.com/fa1nes/faketcp/releases/download/alpine"  # Actions 编译的 Alpine 二进制
 CFGDIR="/etc/mimic"
 SELF="/usr/bin/mimic-manager"
 
@@ -204,22 +205,28 @@ install_deb() {
 }
 
 install_alpine() {
-  # eBPF 编译需 LLVM/clang 工具链（约 1.5GB），空间不足先提示，避免解压中途失败
+  # 优先下载 GitHub Actions 预编译的 musl 二进制，省去本地 ~1.5GB 工具链
+  am="$(uname -m)"
+  info "尝试下载预编译 mimic ($am) ..."
+  if dlo "$PREBUILT/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ]; then
+    chmod +x /usr/bin/mimic
+    apk add --no-cache libbpf libxdp libffi >/dev/null 2>&1 || true  # 动态链接时的小体积运行库
+    ok "已安装预编译 mimic（无需本地编译）"
+    return
+  fi
+  rm -f /usr/bin/mimic
+  warn "无预编译包，回退本地源码编译（约需 1.5GB 空间）"
   avail="$(df -k / 2>/dev/null | awk 'NR==2{print int($4/1024)}')"
   [ -n "$avail" ] && [ "$avail" -lt 1500 ] && \
-    die "磁盘可用空间不足：当前 ${avail}MB，编译工具链约需 1500MB。请先清理或扩容后重试"
+    die "磁盘不足：当前 ${avail}MB，编译工具链约需 1500MB。请扩容，或用 GitHub Actions 生成预编译包"
   info "安装编译依赖 ..."
   apk add --no-cache git make clang gcc pahole bpftool linux-headers \
     elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev || die "依赖安装失败"
   info "克隆并编译源码 ..."
   rm -rf /usr/src/mimic
   git clone --depth 1 "$REPO" /usr/src/mimic || die "克隆失败"
-  make -C /usr/src/mimic || die "编译失败"
+  make -C /usr/src/mimic build-cli CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1 || die "编译失败"
   install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic || die "未找到编译产物 out/mimic"
-  if [ -f /usr/src/mimic/out/mimic.ko ]; then
-    install -Dm644 /usr/src/mimic/out/mimic.ko "/lib/modules/$(uname -r)/extra/mimic.ko"
-    depmod 2>/dev/null
-  fi
 }
 
 install_owrt() {
