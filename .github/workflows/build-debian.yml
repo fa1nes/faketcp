@@ -45,10 +45,9 @@ jobs:
             ls -la "mimic-debian-$(uname -m)"
           '
 
-      - name: 发布到 debian Release
+      - name: publish to debian release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: debian
-          name: Debian/glibc 预编译二进制
-          body: "mimic glibc 二进制（动态链接，kprobe，无内核模块）。上游：${{ steps.ver.outputs.ref }}"
+          name: debian ${{ steps.ver.outputs.ref }}
           files: mimic-debian-*

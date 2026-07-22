@@ -232,18 +232,25 @@ install_alpine() {
 }
 
 install_owrt() {
-  # 优先装 Actions 预编译的 userspace ipk（kprobe，无 kmod，免内核 vermagic 匹配）
+  am="$(uname -m)"
+  # 1) 优先装 Actions 用官方 SDK 编好的 ipk
   td="$(mktemp -d)"
   info "下载预编译 ipk ..."
-  if dlo "$REL/openwrt/mimic-openwrt-$(uname -m).ipk" "$td/mimic.ipk" && [ -s "$td/mimic.ipk" ]; then
+  if dlo "$REL/openwrt/mimic-openwrt-$am.ipk" "$td/mimic.ipk" && [ -s "$td/mimic.ipk" ]; then
     opkg update 2>/dev/null
-    opkg install "$td/mimic.ipk" || { rm -rf "$td"; die "ipk 安装失败（依赖缺失，请检查软件源）"; }
-    rm -rf "$td"; return
+    if opkg install "$td/mimic.ipk"; then rm -rf "$td"; ok "已安装 ipk"; return; fi
+    warn "ipk 安装失败，改用通用 musl 二进制"
   fi
   rm -rf "$td"
-  warn "无预编译 ipk，回退官方 opkg 源（需内核匹配，不强装）..."
-  opkg update || die "opkg update 失败"
-  opkg install kmod-mimic mimic || die "opkg 安装失败（可能内核不匹配或缺少软件源）"
+  # 2) 兜底：同架构 musl 二进制通用（复用 alpine 产物）+ opkg 运行库
+  info "下载通用 musl 二进制 ($am) ..."
+  dlo "$REL/alpine/mimic-alpine-$am" /usr/bin/mimic && [ -s /usr/bin/mimic ] \
+    || die "下载预编译包失败，请先在 Actions 运行对应构建"
+  chmod +x /usr/bin/mimic
+  info "安装运行库 ..."
+  opkg update >/dev/null 2>&1 || true
+  opkg install libbpf libxdp libffi >/dev/null 2>&1 \
+    || warn "运行库可能不全，若无法启动请手动 opkg install libbpf libxdp"
 }
 
 do_install() {
