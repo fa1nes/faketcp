@@ -227,6 +227,7 @@ install_alpine() {
   info "克隆并编译源码 ..."
   rm -rf /usr/src/mimic
   git clone --depth 1 "$REPO" /usr/src/mimic || die "克隆失败"
+  sed -i "s/if (padding_len > 0)/if (0)/" /usr/src/mimic/bpf/egress.c 2>/dev/null
   make -C /usr/src/mimic build-cli CHECKSUM_HACK=kprobe || die "编译失败"
   [ -s /usr/src/mimic/out/mimic ] || die "未找到编译产物 out/mimic"
   rm -f /usr/bin/mimic; install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic

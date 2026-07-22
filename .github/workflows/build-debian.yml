@@ -51,6 +51,7 @@ jobs:
             apt-get install -y --no-install-recommends git make clang llvm gcc pkg-config \
               libbpf-dev libelf-dev zlib1g-dev libxdp-dev bpftool dwarves libffi-dev ca-certificates
             git clone --depth 1 -b "$REF" https://github.com/hack3ric/mimic src
+            sed -i "s/if (padding_len > 0)/if (0)/" src/bpf/egress.c
             make -C src build-cli CHECKSUM_HACK=kprobe
             cp src/out/mimic "mimic-debian-$(uname -m)"
             ls -la "mimic-debian-$(uname -m)"

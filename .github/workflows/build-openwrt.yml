@@ -53,6 +53,7 @@ jobs:
             for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done; export PATH
             command -v llvm-strip
             git clone --depth 1 -b "$REF" https://github.com/hack3ric/mimic src
+            sed -i "s/if (padding_len > 0)/if (0)/" src/bpf/egress.c
             make -C src build-cli CHECKSUM_HACK=kprobe STATIC=1
             file src/out/mimic
             cp src/out/mimic "mimic-openwrt-$(uname -m)"
