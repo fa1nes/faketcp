@@ -205,8 +205,9 @@ install_deb() {
 
 install_alpine() {
   info "安装编译依赖 ..."
-  apk add --no-cache git make clang llvm libbpf-dev bpftool linux-headers \
-    elfutils-dev argp-standalone libxdp-dev pkgconf gcc musl-dev pahole || die "依赖安装失败"
+  # 依赖对齐上游 building.md：clang 自带所需 llvm 运行库，无需独立的巨型 llvm 工具包
+  apk add --no-cache git make clang gcc pahole bpftool linux-headers \
+    elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev || die "依赖安装失败"
   info "克隆并编译源码 ..."
   rm -rf /usr/src/mimic
   git clone --depth 1 "$REPO" /usr/src/mimic || die "克隆失败"
