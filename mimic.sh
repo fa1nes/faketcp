@@ -252,15 +252,27 @@ install_kmod_deb() {
 
 install_kmod_alpine() {
   km="/lib/modules/$(uname -r)/extra/mimic.ko"
-  info "下载匹配内核的模块 ..."
   mkdir -p "$(dirname "$km")"
+  info "下载匹配内核的模块 ..."
   if dlgh "$REL/kmod/mimic-$(uname -r).ko" "$km" && [ -s "$km" ]; then
     depmod 2>/dev/null
+    modprobe mimic 2>/dev/null && { ok "内核模块已加载（满速模式）"; return; }
+  fi
+  rm -f "$km"
+  fl="$(uname -r | sed 's/.*-//')"
+  warn "无匹配 CI 模块，尝试本地编译 linux-${fl} 模块 ..."
+  apk add --no-cache git make gcc build-base "linux-${fl}-dev" >/dev/null 2>&1 \
+    || { warn "内核头/工具装不上；请 apk upgrade+reboot 到最新内核后重装，暂走 ethtool 降速方案"; return; }
+  rm -rf /usr/src/mimic-kmod
+  if git clone --depth 1 "$REPO" /usr/src/mimic-kmod >/dev/null 2>&1 \
+     && make -C /usr/src/mimic-kmod/kmod KERNEL_UNAME="$(uname -r)" CHECKSUM_HACK=kprobe >/dev/null 2>&1; then
+    install -Dm644 /usr/src/mimic-kmod/kmod/mimic.ko "$km"; depmod 2>/dev/null
     modprobe mimic 2>/dev/null && ok "内核模块已加载（满速模式）" || warn "模块加载失败"
   else
-    rm -f "$km"
-    warn "无匹配 $(uname -r) 的模块。请 apk upgrade + reboot 到最新内核后重装（CI 按最新内核编译）；暂走 ethtool 降速方案"
+    warn "本地编译失败（内核头与运行内核不符，请 apk upgrade+reboot 到最新内核），暂走 ethtool 降速方案"
   fi
+  rm -rf /usr/src/mimic-kmod
+  apk del git make gcc build-base "linux-${fl}-dev" >/dev/null 2>&1 || true
 }
 
 do_install() {
