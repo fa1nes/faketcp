@@ -120,7 +120,7 @@ Description=Mimic faketcp on %i
 After=network.target
 
 [Service]
-ExecStartPre=-/bin/sh -c 'modprobe mimic 2>/dev/null; ethtool -K %i gro off lro off 2>/dev/null; lsmod | grep -q "^mimic " || ethtool -K %i tx off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock; true'
+ExecStartPre=-/bin/sh -c 'ethtool -K %i tx off gro off lro off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock; true'
 ExecStart=/usr/bin/mimic run -F /etc/mimic/%i.conf %i
 Restart=always
 RestartSec=3
@@ -140,7 +140,7 @@ command_args="run -F /etc/mimic/${IFACE}.conf ${IFACE}"
 supervise_daemon_args="--stdout /var/log/faketcp.log --stderr /var/log/faketcp.log"
 respawn_delay=3
 pidfile="/run/faketcp.pid"
-start_pre() { modprobe mimic 2>/dev/null; ethtool -K "${IFACE}" gro off lro off 2>/dev/null; lsmod | grep -q "^mimic " || ethtool -K "${IFACE}" tx off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
+start_pre() { ethtool -K "${IFACE}" tx off gro off lro off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
 EOF
       chmod +x /etc/init.d/faketcp ;;
     procd)
@@ -151,9 +151,7 @@ STOP=10
 USE_PROCD=1
 start_service() {
   local iface; iface="$(cat /etc/mimic/iface 2>/dev/null)"
-  modprobe mimic 2>/dev/null
-  ethtool -K "$iface" gro off lro off 2>/dev/null
-  lsmod | grep -q "^mimic " || ethtool -K "$iface" tx off 2>/dev/null
+  ethtool -K "$iface" tx off gro off lro off 2>/dev/null
   procd_open_instance
   procd_set_param command /usr/bin/mimic run -F "/etc/mimic/${iface}.conf" "${iface}"
   procd_set_param respawn
@@ -171,9 +169,8 @@ svc() {
     systemd)
       case "$1" in
         restart) systemctl enable "faketcp@$IFACE" 2>/dev/null; systemctl restart "faketcp@$IFACE" ;;
-        status)  systemctl --no-pager status "faketcp@$IFACE" 2>/dev/null | head -n 11
-                 pid="$(systemctl show -p MainPID --value "faketcp@$IFACE" 2>/dev/null)"
-                 { [ -n "$pid" ] && [ "$pid" != 0 ]; } && { echo; sect "本次日志"; journalctl _PID="$pid" --no-pager 2>/dev/null; } ;;
+        status)  systemctl --no-pager status "faketcp@$IFACE" 2>/dev/null
+                 echo; sect "最近日志"; journalctl -u "faketcp@$IFACE" -n 50 --no-pager 2>/dev/null ;;
         disable) systemctl disable --now "faketcp@$IFACE" 2>/dev/null ;;
       esac ;;
     openrc)
@@ -242,51 +239,10 @@ install_owrt() {
     || warn "运行库可能不全，若无法启动请手动 opkg install libbpf libxdp"
 }
 
-install_kmod_deb() {
-  info "编译内核模块（校验和补丁，满速）..."
-  apt-get install -y --no-install-recommends build-essential git >/dev/null 2>&1 || true
-  apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" >/dev/null 2>&1 \
-    || apt-get install -y --no-install-recommends "pve-headers-$(uname -r)" >/dev/null 2>&1 \
-    || apt-get install -y --no-install-recommends "proxmox-headers-$(uname -r)" >/dev/null 2>&1 \
-    || { warn "内核头不可用（Proxmox 需先加 PVE 源），跳过模块，走 ethtool 降速方案"; return; }
-  fetch_src /usr/src/mimic-kmod >/dev/null 2>&1 || { warn "源码下载失败，跳过模块"; return; }
-  if make -C /usr/src/mimic-kmod/kmod KERNEL_UNAME="$(uname -r)" CHECKSUM_HACK=kprobe >/dev/null 2>&1; then
-    install -Dm644 /usr/src/mimic-kmod/kmod/mimic.ko "/lib/modules/$(uname -r)/extra/mimic.ko"
-    depmod 2>/dev/null
-    modprobe mimic 2>/dev/null && ok "内核模块已加载（满速模式）" || warn "模块加载失败"
-  else
-    warn "模块编译失败，走 ethtool 降速方案"
-  fi
-}
-
-install_kmod_alpine() {
-  km="/lib/modules/$(uname -r)/extra/mimic.ko"
-  mkdir -p "$(dirname "$km")"
-  info "下载匹配内核的模块 ..."
-  if dlgh "$REL/kmod/mimic-$(uname -r).ko" "$km" && [ -s "$km" ]; then
-    depmod 2>/dev/null
-    modprobe mimic 2>/dev/null && { ok "内核模块已加载（满速模式）"; return; }
-  fi
-  rm -f "$km"
-  fl="$(uname -r | sed 's/.*-//')"
-  warn "无匹配 CI 模块，尝试本地编译 linux-${fl} 模块 ..."
-  apk add --no-cache make gcc build-base "linux-${fl}-dev" >/dev/null 2>&1 \
-    || { warn "内核头/工具装不上；请 apk upgrade+reboot 到最新内核后重装，暂走 ethtool 降速方案"; return; }
-  if fetch_src /usr/src/mimic-kmod >/dev/null 2>&1 \
-     && make -C /usr/src/mimic-kmod/kmod KERNEL_UNAME="$(uname -r)" CHECKSUM_HACK=kprobe >/dev/null 2>&1; then
-    install -Dm644 /usr/src/mimic-kmod/kmod/mimic.ko "$km"; depmod 2>/dev/null
-    modprobe mimic 2>/dev/null && ok "内核模块已加载（满速模式）" || warn "模块加载失败"
-  else
-    warn "本地编译失败（内核头与运行内核不符，请 apk upgrade+reboot 到最新内核），暂走 ethtool 降速方案"
-  fi
-  rm -rf /usr/src/mimic-kmod
-  apk del make gcc build-base "linux-${fl}-dev" >/dev/null 2>&1 || true
-}
-
 do_install() {
   case "$PKG" in
-    deb)    install_deb; install_kmod_deb ;;
-    alpine) install_alpine; install_kmod_alpine ;;
+    deb)    install_deb ;;
+    alpine) install_alpine ;;
     owrt)   install_owrt ;;
   esac
   [ -n "$IFACE" ] && echo "$IFACE" > "$CFGDIR/iface"
