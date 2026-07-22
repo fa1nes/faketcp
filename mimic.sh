@@ -245,7 +245,19 @@ install_owrt() {
     || warn "运行库可能不全，若无法启动请手动 opkg install libbpf libxdp"
 }
 
+cleanup_old() {
+  systemctl disable --now "faketcp@$IFACE" 2>/dev/null
+  rm -f /etc/systemd/system/faketcp@.service
+  [ -x /etc/init.d/faketcp ] && { rc-service faketcp stop 2>/dev/null; rc-update del faketcp default 2>/dev/null; /etc/init.d/faketcp stop 2>/dev/null; /etc/init.d/faketcp disable 2>/dev/null; }
+  rm -f /etc/init.d/faketcp
+  pkill -f '/usr/bin/mimic run' 2>/dev/null
+  sleep 1
+  rm -f /run/mimic/*.lock 2>/dev/null
+  systemctl daemon-reload 2>/dev/null
+}
+
 do_install() {
+  cleanup_old
   case "$PKG" in
     deb)    install_deb ;;
     alpine) install_alpine ;;
