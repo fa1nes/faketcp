@@ -238,7 +238,7 @@ alpine_build_local() {
     || apk add --no-cache "$(apk search -q '^llvm[0-9]*$' | sort -V | tail -n1)" >/dev/null 2>&1 || true
   for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done; export PATH
   fetch_src /usr/src/mimic || { warn "源码下载失败"; return 1; }
-  if make -C /usr/src/mimic KERNEL_UNAME="$(uname -r)" >/dev/null 2>&1 && [ -s /usr/src/mimic/out/mimic.ko ]; then
+  if BOOT_DIR=/boot make -C /usr/src/mimic KERNEL_UNAME="$(uname -r)" VMLINUX_SUFFIX="-${fl}" >/dev/null 2>&1 && [ -s /usr/src/mimic/out/mimic.ko ]; then
     rm -f /usr/bin/mimic; install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic
     install -Dm644 /usr/src/mimic/out/mimic.ko "/lib/modules/$(uname -r)/extra/mimic.ko"
     depmod 2>/dev/null

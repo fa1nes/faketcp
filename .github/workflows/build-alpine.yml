@@ -31,7 +31,7 @@ jobs:
               [ -x "$KB/tools/bpf/resolve_btfids/resolve_btfids" ] \
                 || make -C "$KB/tools/bpf/resolve_btfids" 2>/dev/null || true
               RB="$KB/tools/bpf/resolve_btfids/resolve_btfids"
-              if make -C src build-kmod KERNEL_UNAME="$KVER" RESOLVE_BTFIDS="$RB"; then
+              if BOOT_DIR=/boot make -C src build-kmod KERNEL_UNAME="$KVER" VMLINUX_SUFFIX="-${FL}" RESOLVE_BTFIDS="$RB"; then
                 cp src/out/mimic.ko "/out/mimic-${KVER}.ko"
                 echo "built module /out/mimic-${KVER}.ko"
               else
