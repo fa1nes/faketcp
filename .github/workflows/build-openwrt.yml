@@ -40,19 +40,21 @@ jobs:
           fi
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
 
-      - name: build musl binary in alpine container
+      - name: build static musl binary
         if: steps.ver.outputs.skip != 'true'
         env:
           REF: ${{ steps.ver.outputs.ref }}
         run: |
           docker run --rm -e REF -v "$PWD":/w -w /w alpine:latest sh -ec '
-            apk add --no-cache git make clang gcc pahole bpftool linux-headers \
-              elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev
+            apk add --no-cache git make clang gcc pahole bpftool linux-headers file \
+              elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev \
+              zlib-static zstd-static
             apk add --no-cache llvm || apk add --no-cache "$(apk search -q "^llvm[0-9]*$" | sort -V | tail -n1)"
             for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done; export PATH
             command -v llvm-strip
             git clone --depth 1 -b "$REF" https://github.com/hack3ric/mimic src
-            make -C src build-cli CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1
+            make -C src build-cli CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1 STATIC=1
+            file src/out/mimic
             cp src/out/mimic "mimic-openwrt-$(uname -m)"
             ls -la "mimic-openwrt-$(uname -m)"
           '
