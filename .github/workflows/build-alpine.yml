@@ -1,16 +1,18 @@
 name: build-alpine-mimic
 
-# 在 Alpine 容器里编译 mimic 的 musl 二进制，发布到名为 alpine 的 Release，
-# 供低磁盘的 Alpine 机器直接下载（无需本地 LLVM/clang 工具链）。
-# 手动触发：仓库 Actions 页 -> build-alpine-mimic -> Run workflow。
+# 在 Alpine 容器里编译 mimic 的 musl 二进制（动态链接，无内核模块，kprobe 校验和），
+# 发布到名为 alpine 的 Release，供低磁盘的 Alpine 机器直接下载。
+# 触发方式：手动（Actions 页 Run workflow）或每日定时自动同步上游最新 tag。
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "mimic 上游分支或 tag"
-        default: "master"
+        description: "mimic 上游分支或 tag（留空=自动取最新 tag）"
+        default: ""
         required: false
+  schedule:
+    - cron: "0 4 * * *"   # 每日 04:00 UTC 自动重建，同步上游
 
 permissions:
   contents: write
@@ -19,17 +21,27 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 在 Alpine 容器内编译（musl, 无内核模块, kprobe 校验和）
+      - name: 解析上游版本
+        id: ver
+        run: |
+          REF="${{ github.event.inputs.ref }}"
+          [ -n "$REF" ] || REF="$(git ls-remote --tags --refs --sort=-v:refname \
+            https://github.com/hack3ric/mimic 'v*' | head -n1 | sed 's#.*/##')"
+          [ -n "$REF" ] || REF="master"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "将编译 mimic@$REF"
+
+      - name: 在 Alpine 容器内编译
         env:
-          REF: ${{ github.event.inputs.ref }}
+          REF: ${{ steps.ver.outputs.ref }}
         run: |
           docker run --rm -e REF -v "$PWD":/w -w /w alpine:latest sh -ec '
             apk add --no-cache git make clang gcc pahole bpftool linux-headers \
-              elfutils-dev elfutils-static libbpf-dev libffi-dev libffi-static \
-              argp-standalone libxdp-dev zlib-static musl-dev pkgconf
+              elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev
             git clone --depth 1 -b "$REF" https://github.com/hack3ric/mimic src
-            make -C src build-cli CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1 STATIC=1
+            make -C src build-cli CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1
             cp src/out/mimic "mimic-alpine-$(uname -m)"
+            ls -la "mimic-alpine-$(uname -m)"
           '
 
       - name: 发布到 alpine Release
@@ -37,4 +49,5 @@ jobs:
         with:
           tag_name: alpine
           name: Alpine 预编译二进制
+          body: "mimic musl 二进制（动态链接，kprobe，无内核模块）。上游版本：${{ steps.ver.outputs.ref }}"
           files: mimic-alpine-*
