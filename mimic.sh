@@ -113,7 +113,7 @@ Description=Mimic faketcp on %i
 After=network.target
 
 [Service]
-ExecStartPre=-/bin/sh -c 'ethtool -K %i tx off rx off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock; true'
+ExecStartPre=-/bin/sh -c 'ethtool -K %i tx off gro off lro off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock; true'
 ExecStart=/usr/bin/mimic run -F /etc/mimic/%i.conf %i
 Restart=always
 RestartSec=3
@@ -133,7 +133,7 @@ command_args="run -F /etc/mimic/${IFACE}.conf ${IFACE}"
 supervise_daemon_args="--stdout /var/log/faketcp.log --stderr /var/log/faketcp.log"
 respawn_delay=3
 pidfile="/run/faketcp.pid"
-start_pre() { ethtool -K "${IFACE}" tx off rx off 2>/dev/null; modprobe mimic 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
+start_pre() { ethtool -K "${IFACE}" tx off gro off lro off 2>/dev/null; modprobe mimic 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
 EOF
       chmod +x /etc/init.d/faketcp ;;
     procd)
@@ -144,7 +144,7 @@ STOP=10
 USE_PROCD=1
 start_service() {
   local iface; iface="$(cat /etc/mimic/iface 2>/dev/null)"
-  ethtool -K "$iface" tx off rx off 2>/dev/null
+  ethtool -K "$iface" tx off gro off lro off 2>/dev/null
   procd_open_instance
   procd_set_param command /usr/bin/mimic run -F "/etc/mimic/${iface}.conf" "${iface}"
   procd_set_param respawn
