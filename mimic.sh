@@ -113,8 +113,7 @@ Description=Mimic faketcp on %i
 After=network.target
 
 [Service]
-ExecStartPre=-/sbin/modprobe sch_ingress
-ExecStartPre=-/bin/sh -c 'rm -f /run/mimic/*.lock'
+ExecStartPre=-/bin/sh -c 'modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock; true'
 ExecStart=/usr/bin/mimic run -F /etc/mimic/%i.conf %i
 Restart=always
 RestartSec=3
