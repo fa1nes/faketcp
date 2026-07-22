@@ -2,7 +2,6 @@
 set -u
 
 REPO="https://github.com/hack3ric/mimic"
-API="https://api.github.com/repos/hack3ric/mimic/releases/latest"
 REL="https://github.com/fa1nes/faketcp/releases/download"
 GHPROXY="${GHPROXY-https://ghfast.top}"
 CFGDIR="/etc/mimic"
@@ -26,13 +25,9 @@ die() { printf "%s✗ 错误: %s%s\n" "$RED" "$*" "$R" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "请用 root 运行"
 
 if command -v curl >/dev/null 2>&1; then
-  dl()  { curl -fsSL "$1"; }
   dlo() { curl -fsSL "$1" -o "$2"; }
-  dlf() { curl -"$1" -fsSL "$2" 2>/dev/null; }
 elif command -v wget >/dev/null 2>&1; then
-  dl()  { wget -qO- "$1"; }
   dlo() { wget -qO "$2" "$1"; }
-  dlf() { wget -qO- "$2" 2>/dev/null; }
 else
   die "需要 curl 或 wget"
 fi
@@ -139,7 +134,7 @@ command_args="run -F /etc/mimic/${IFACE}.conf ${IFACE}"
 supervise_daemon_args="--stdout /var/log/faketcp.log --stderr /var/log/faketcp.log"
 respawn_delay=3
 pidfile="/run/faketcp.pid"
-start_pre() { modprobe mimic 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; return 0; }
+start_pre() { modprobe mimic 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock 2>/dev/null; : > /var/log/faketcp.log; return 0; }
 EOF
       chmod +x /etc/init.d/faketcp ;;
     procd)
@@ -166,33 +161,33 @@ svc() {
   case "$INIT" in
     systemd)
       case "$1" in
-        start)   systemctl enable --now "faketcp@$IFACE" ;;
-        stop)    systemctl stop "faketcp@$IFACE" ;;
-        restart) systemctl restart "faketcp@$IFACE" ;;
-        status)  systemctl --no-pager status "faketcp@$IFACE"; echo; sect "最近日志"; journalctl -u "faketcp@$IFACE" -n 30 --no-pager 2>/dev/null ;;
+        restart) systemctl enable "faketcp@$IFACE" 2>/dev/null; systemctl restart "faketcp@$IFACE" ;;
+        status)  systemctl --no-pager status "faketcp@$IFACE" 2>/dev/null | head -n 11
+                 pid="$(systemctl show -p MainPID --value "faketcp@$IFACE" 2>/dev/null)"
+                 { [ -n "$pid" ] && [ "$pid" != 0 ]; } && { echo; sect "本次日志"; journalctl _PID="$pid" --no-pager 2>/dev/null; } ;;
         disable) systemctl disable --now "faketcp@$IFACE" 2>/dev/null ;;
       esac ;;
     openrc)
       case "$1" in
-        start)   rc-update add faketcp default 2>/dev/null; rc-service faketcp start ;;
-        stop)    rc-service faketcp stop ;;
-        restart) rc-service faketcp restart ;;
-        status)  rc-service faketcp status; echo; sect "最近日志"; tail -n 30 /var/log/faketcp.log 2>/dev/null || echo "（暂无日志）" ;;
+        restart) rc-update add faketcp default 2>/dev/null; rc-service faketcp restart ;;
+        status)  rc-service faketcp status; echo; sect "本次日志"; tail -n 20 /var/log/faketcp.log 2>/dev/null || echo "（暂无日志）" ;;
         disable) rc-update del faketcp default 2>/dev/null; rc-service faketcp stop 2>/dev/null ;;
       esac ;;
     procd)
       case "$1" in
-        start)   /etc/init.d/faketcp enable; /etc/init.d/faketcp start ;;
-        stop)    /etc/init.d/faketcp stop ;;
-        restart) /etc/init.d/faketcp restart ;;
-        status)  { /etc/init.d/faketcp status 2>/dev/null || pgrep -a mimic || echo "未运行"; }; echo; sect "最近日志"; logread 2>/dev/null | grep -i mimic | tail -n 30 || echo "（暂无日志）" ;;
+        restart) /etc/init.d/faketcp enable; /etc/init.d/faketcp restart ;;
+        status)  { /etc/init.d/faketcp status 2>/dev/null || pgrep -a mimic || echo "未运行"; }; echo; sect "本次日志"; logread 2>/dev/null | grep -i mimic | tail -n 15 || echo "（暂无日志）" ;;
         disable) /etc/init.d/faketcp disable 2>/dev/null; /etc/init.d/faketcp stop 2>/dev/null ;;
       esac ;;
   esac
 }
 
-latest_tag() {
-  dl "$API" 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4
+bin_url() {
+  case "$PKG" in
+    deb)    echo "$REL/debian/mimic-debian-$(uname -m)" ;;
+    alpine) echo "$REL/alpine/mimic-alpine-$(uname -m)" ;;
+    owrt)   echo "$REL/openwrt/mimic-openwrt-$(uname -m)" ;;
+  esac
 }
 
 install_entry() {
@@ -201,18 +196,15 @@ install_entry() {
 }
 
 install_deb() {
-  am="$(uname -m)"
-  info "下载预编译 mimic ($am) ..."
-  install_bin "$REL/debian/mimic-debian-$am" \
-    || die "下载预编译包失败，请先在 Actions 运行 build-debian-mimic 生成"
+  info "下载预编译 mimic ..."
+  install_bin "$(bin_url)" || die "下载预编译包失败，请先在 Actions 运行 build-debian-mimic 生成"
   info "安装运行库 ..."
   apt-get install -y --no-install-recommends libbpf1 libxdp1 >/dev/null 2>&1 || true
 }
 
 install_alpine() {
-  am="$(uname -m)"
-  info "尝试下载预编译 mimic ($am) ..."
-  if install_bin "$REL/alpine/mimic-alpine-$am"; then
+  info "尝试下载预编译 mimic ..."
+  if install_bin "$(bin_url)"; then
     apk add --no-cache libbpf libxdp libffi >/dev/null 2>&1 || true
     ok "已安装预编译 mimic（无需本地编译）"
     return
@@ -234,10 +226,8 @@ install_alpine() {
 }
 
 install_owrt() {
-  am="$(uname -m)"
-  info "下载预编译 mimic ($am) ..."
-  install_bin "$REL/openwrt/mimic-openwrt-$am" \
-    || die "下载预编译包失败，请先在 Actions 运行 build-openwrt-mimic 生成"
+  info "下载预编译 mimic ..."
+  install_bin "$(bin_url)" || die "下载预编译包失败，请先在 Actions 运行 build-openwrt-mimic 生成"
   info "安装运行库 ..."
   opkg update >/dev/null 2>&1 || true
   opkg install libbpf libxdp libffi >/dev/null 2>&1 \
@@ -253,8 +243,19 @@ do_install() {
   [ -n "$IFACE" ] && echo "$IFACE" > "$CFGDIR/iface"
   write_service
   install_entry
-  latest_tag > "$CFGDIR/version" 2>/dev/null
   ok "安装完成。管理入口: faketcp / mimic-manager，默认网卡: $IFACE"
+}
+
+auto_update() {
+  [ -x /usr/bin/mimic ] || return
+  u="$(bin_url)"; [ -n "$u" ] || return
+  info "检查更新 ..."
+  tmp="/usr/bin/.mimic.new"
+  dlgh "$u" "$tmp" && [ -s "$tmp" ] || { rm -f "$tmp"; return; }
+  if cmp -s "$tmp" /usr/bin/mimic; then rm -f "$tmp"; ok "已是最新版"; return; fi
+  chmod +x "$tmp"; mv -f "$tmp" /usr/bin/mimic
+  ok "已更新到最新 mimic"
+  [ -f "$CFGDIR/iface" ] && svc restart
 }
 
 gen_server_filters() {
@@ -337,16 +338,6 @@ view_cfg() {
   [ -f "$CFGDIR/$IFACE.conf" ] && cat "$CFGDIR/$IFACE.conf" || echo "（未生成）"
 }
 
-do_update() {
-  cur="$(cat "$CFGDIR/version" 2>/dev/null || echo 无)"
-  new="$(latest_tag)"
-  printf "当前版本: %s%s%s   最新版本: %s%s%s\n" "$YLW" "$cur" "$R" "$GRN" "${new:-未知}" "$R"
-  [ -n "$new" ] || { warn "无法获取最新版本"; return; }
-  [ "$cur" = "$new" ] && { ok "已是最新版本"; return; }
-  printf "%s发现新版本 %s，是否更新? [y/N] %s" "$B" "$new" "$R"; read -r a
-  case "$a" in y|Y) do_install ;; *) echo "已取消" ;; esac
-}
-
 do_uninstall() {
   printf "%s将删除 mimic 及 %s 下全部配置与服务，确认? [y/N] %s" "$RED" "$CFGDIR" "$R"; read -r a
   case "$a" in y|Y) ;; *) echo "已取消"; return ;; esac
@@ -375,12 +366,9 @@ menu() {
     printf "  %s2%s) 配置服务端\n" "$GRN" "$R"
     printf "  %s3%s) 配置客户端\n" "$GRN" "$R"
     printf "  %s4%s) 查看配置\n"   "$CYN" "$R"
-    printf "  %s5%s) 启动\n"       "$GRN" "$R"
-    printf "  %s6%s) 停止\n"       "$YLW" "$R"
-    printf "  %s7%s) 重启\n"       "$YLW" "$R"
-    printf "  %s8%s) 状态\n"       "$CYN" "$R"
-    printf "  %s9%s) 更新\n"       "$MAG" "$R"
-    printf " %s10%s) 完全卸载\n"   "$RED" "$R"
+    printf "  %s5%s) 重启\n"       "$GRN" "$R"
+    printf "  %s6%s) 状态\n"       "$CYN" "$R"
+    printf "  %s7%s) 完全卸载\n"   "$RED" "$R"
     printf "  %s0%s) 退出\n"       "$GRY" "$R"
     printf "%s请选择: %s" "$B" "$R"; read -r n
     case "$n" in
@@ -388,12 +376,9 @@ menu() {
       2) cfg_server ;;
       3) cfg_client ;;
       4) view_cfg ;;
-      5) svc start ;;
-      6) svc stop ;;
-      7) svc restart ;;
-      8) svc status ;;
-      9) do_update ;;
-      10) do_uninstall ;;
+      5) svc restart; sleep 1; svc status ;;
+      6) svc status ;;
+      7) do_uninstall ;;
       0) exit 0 ;;
       *) warn "无效选择" ;;
     esac
@@ -401,4 +386,5 @@ menu() {
   done
 }
 
+auto_update
 menu
