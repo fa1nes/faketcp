@@ -108,6 +108,11 @@ write_service() {
   case "$INIT" in
     systemd)
       rm -f /etc/systemd/system/faketcp@.service
+      mkdir -p /etc/systemd/system/mimic@.service.d
+      cat > /etc/systemd/system/mimic@.service.d/faketcp.conf <<'EOF'
+[Service]
+ExecStartPre=-/bin/sh -c 'modprobe mimic 2>/dev/null; lsmod | grep -q "^mimic " || ethtool -K %i tx off gro off lro off 2>/dev/null; true'
+EOF
       systemctl daemon-reload 2>/dev/null ;;
     openrc)
       cat > /etc/init.d/faketcp <<'EOF'
@@ -195,11 +200,13 @@ install_deb() {
   td="$(mktemp -d)"
   info "下载官方 deb（mimic + mimic-dkms，kfunc 满速）..."
   dlgh "$cli" "$td/a.deb" && dlgh "$dkms" "$td/b.deb" || { rm -rf "$td"; die "下载失败"; }
+  apt-get install -y --no-install-recommends ethtool >/dev/null 2>&1 || true
   info "安装当前内核头（DKMS 只为运行内核编译）..."
   apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" >/dev/null 2>&1 \
-    || apt-get install -y --no-install-recommends "pve-headers-$(uname -r)" >/dev/null 2>&1 \
     || apt-get install -y --no-install-recommends "proxmox-headers-$(uname -r)" >/dev/null 2>&1 \
-    || warn "未找到当前内核头（$(uname -r)），DKMS 可能失败"
+    || apt-get install -y --no-install-recommends "pve-headers-$(uname -r)" >/dev/null 2>&1 \
+    || apt-get install -y --no-install-recommends proxmox-default-headers >/dev/null 2>&1 \
+    || warn "未找到当前内核头（$(uname -r)）→ 无模块，将用 ethtool 兜底（客户端够用）"
   info "安装官方 deb（--no-install-recommends 避免拉入无关内核）..."
   apt-get install -y --no-install-recommends "$td/a.deb" "$td/b.deb" \
     || { rm -rf "$td"; die "安装失败，见上方 DKMS 日志"; }
