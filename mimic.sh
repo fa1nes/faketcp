@@ -267,18 +267,40 @@ do_install() {
 }
 
 # ---------- 配置 ----------
+gen_server_filters() { # $1=IPv4 $2=IPv6，由 server.ports 生成 local= 过滤器
+  : > "$CFGDIR/server.filters"
+  [ -f "$CFGDIR/server.ports" ] || return
+  while IFS= read -r port; do
+    [ -n "$port" ] || continue
+    [ -n "$1" ] && fmt local "$1" "$port" >> "$CFGDIR/server.filters"
+    [ -n "$2" ] && fmt local "$2" "$port" >> "$CFGDIR/server.filters"
+  done < "$CFGDIR/server.ports"
+}
+
 cfg_server() {
   echo "$IFACE" > "$CFGDIR/iface"
+  touch "$CFGDIR/server.ports"
   info "正在获取公网 IP ..."
   p4="$(pubip 4)"; p6="$(pubip 6)"
   printf "  IPv4: %s%s%s   IPv6: %s%s%s\n" "$GRN" "${p4:-无}" "$R" "$GRN" "${p6:-无}" "$R"
-  printf "%s请输入 UDP 端口: %s" "$B" "$R"; read -r port
-  [ -n "$port" ] || { warn "端口不能为空"; return; }
-  : > "$CFGDIR/server.filters"
-  [ -n "$p4" ] && fmt local "$p4" "$port" >> "$CFGDIR/server.filters"
-  [ -n "$p6" ] && fmt local "$p6" "$port" >> "$CFGDIR/server.filters"
-  regen_conf
-  ok "服务端配置完成（网卡 $IFACE，端口 $port）"
+  while :; do
+    sect "服务端端口管理"
+    printf "  %s1%s) 添加   %s2%s) 查看   %s3%s) 删除   %s0%s) 返回\n" \
+      "$GRN" "$R" "$GRN" "$R" "$GRN" "$R" "$YLW" "$R"
+    printf "%s选择: %s" "$B" "$R"; read -r c
+    case "$c" in
+      1) printf "UDP 端口: "; read -r port
+         echo "$port" | grep -qE '^[0-9]+$' || { warn "端口须为数字"; continue; }
+         grep -qxF "$port" "$CFGDIR/server.ports" || echo "$port" >> "$CFGDIR/server.ports"
+         gen_server_filters "$p4" "$p6"; regen_conf ;;
+      2) [ -s "$CFGDIR/server.ports" ] && cat -n "$CFGDIR/server.ports" || echo "（空）" ;;
+      3) [ -s "$CFGDIR/server.ports" ] || { echo "（空）"; continue; }
+         cat -n "$CFGDIR/server.ports"
+         printf "删除第几行: "; read -r n
+         echo "$n" | grep -q '^[0-9]\+$' && { sed -i "${n}d" "$CFGDIR/server.ports"; gen_server_filters "$p4" "$p6"; regen_conf; } ;;
+      0) break ;;
+    esac
+  done
 }
 
 cfg_client() {
@@ -306,8 +328,8 @@ cfg_client() {
 view_cfg() {
   printf "系统: %s%s%s  架构: %s%s%s  网卡: %s%s%s  服务: %s%s%s\n" \
     "$CYN" "$ID" "$R" "$CYN" "$ARCH" "$R" "$CYN" "$IFACE" "$R" "$CYN" "$INIT" "$R"
-  sect "服务端过滤器 ($CFGDIR/server.filters)"
-  [ -s "$CFGDIR/server.filters" ] && cat "$CFGDIR/server.filters" || echo "（无）"
+  sect "服务端端口 ($CFGDIR/server.ports)"
+  [ -s "$CFGDIR/server.ports" ] && cat -n "$CFGDIR/server.ports" || echo "（无）"
   sect "客户端远端 ($CFGDIR/client.list)"
   [ -s "$CFGDIR/client.list" ] && cat -n "$CFGDIR/client.list" || echo "（无）"
   sect "生成的配置 ($CFGDIR/$IFACE.conf)"
