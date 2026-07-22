@@ -212,7 +212,13 @@ install_deb() {
     || { rm -rf "$td"; die "安装失败，见上方 DKMS 日志"; }
   rm -rf "$td"
   echo mimic > /etc/modules-load.d/mimic.conf
-  modprobe mimic 2>/dev/null && ok "mimic 内核模块已加载（kfunc 满速）" || warn "模块未加载，检查 DKMS 日志"
+  if ! modprobe mimic 2>/dev/null; then
+    command -v dkms >/dev/null 2>&1 && { info "触发 DKMS 编译当前内核模块 ..."; dkms autoinstall 2>/dev/null; }
+    modprobe mimic 2>/dev/null
+  fi
+  lsmod | grep -q "^mimic " \
+    && ok "mimic 内核模块已加载（kfunc 满速）" \
+    || warn "模块未加载（无匹配 $(uname -r) 内核头），将用 ethtool 兜底"
 }
 
 install_alpine() {
