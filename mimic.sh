@@ -73,6 +73,10 @@ IFACE="$(cat "$CFGDIR/iface" 2>/dev/null || default_iface)"
 
 mkdir -p "$CFGDIR"
 
+MSVC=faketcp
+{ [ "$INIT" = systemd ] && [ -f /lib/systemd/system/mimic@.service ]; } && MSVC=mimic
+in_container() { systemd-detect-virt -c >/dev/null 2>&1; }
+
 ifip() {
   ip -"$1" -o addr show scope global dev "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
 }
@@ -114,12 +118,30 @@ regen_conf() {
 write_service() {
   case "$INIT" in
     systemd)
-      rm -f /etc/systemd/system/faketcp@.service
-      mkdir -p /etc/systemd/system/mimic@.service.d
-      cat > /etc/systemd/system/mimic@.service.d/faketcp.conf <<'EOF'
+      if [ "$MSVC" = mimic ]; then
+        rm -f /etc/systemd/system/faketcp@.service
+        mkdir -p /etc/systemd/system/mimic@.service.d
+        cat > /etc/systemd/system/mimic@.service.d/faketcp.conf <<'EOF'
 [Service]
 ExecStartPre=-/bin/sh -c 'modprobe mimic 2>/dev/null; lsmod | grep -q "^mimic " || ethtool -K %i tx off gro off lro off 2>/dev/null; true'
 EOF
+      else
+        rm -rf /etc/systemd/system/mimic@.service.d
+        cat > /etc/systemd/system/faketcp@.service <<'EOF'
+[Unit]
+Description=Mimic faketcp on %i
+After=network.target
+
+[Service]
+ExecStartPre=-/bin/sh -c 'ethtool -K %i tx off gro off lro off 2>/dev/null; modprobe sch_ingress 2>/dev/null; rm -f /run/mimic/*.lock; true'
+ExecStart=/usr/bin/mimic run -F /etc/mimic/%i.conf %i
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+      fi
       systemctl daemon-reload 2>/dev/null ;;
     openrc)
       cat > /etc/init.d/faketcp <<'EOF'
@@ -161,10 +183,10 @@ svc() {
   case "$INIT" in
     systemd)
       case "$1" in
-        restart) modprobe mimic 2>/dev/null; systemctl enable "mimic@$IFACE" 2>/dev/null; systemctl restart "mimic@$IFACE" ;;
-        status)  systemctl --no-pager status "mimic@$IFACE" 2>/dev/null
-                 echo; sect "最近日志"; journalctl -u "mimic@$IFACE" -n 50 --no-pager 2>/dev/null ;;
-        disable) systemctl disable --now "mimic@$IFACE" 2>/dev/null ;;
+        restart) modprobe mimic 2>/dev/null; systemctl enable "$MSVC@$IFACE" 2>/dev/null; systemctl restart "$MSVC@$IFACE" ;;
+        status)  systemctl --no-pager status "$MSVC@$IFACE" 2>/dev/null
+                 echo; sect "最近日志"; journalctl -u "$MSVC@$IFACE" -n 50 --no-pager 2>/dev/null ;;
+        disable) systemctl disable --now "$MSVC@$IFACE" 2>/dev/null ;;
       esac ;;
     openrc)
       case "$1" in
@@ -195,6 +217,15 @@ install_entry() {
 }
 
 install_deb() {
+  if in_container; then
+    info "检测到容器（LXC）→ 用 kprobe 二进制（容器加载不了内核模块）..."
+    MSVC=faketcp
+    rm -rf /etc/systemd/system/mimic@.service.d 2>/dev/null
+    install_bin "$REL/debian/mimic-debian-$(uname -m)" || die "下载失败，请先在 Actions 运行 build-debian-mimic"
+    apt-get install -y --no-install-recommends libbpf1 libxdp1 ethtool >/dev/null 2>&1 || true
+    return
+  fi
+  MSVC=mimic
   cn="$VERSION_CODENAME"
   info "获取官方 Release ..."
   j=/tmp/mimic-rel.json
@@ -413,7 +444,9 @@ do_uninstall() {
     alpine) rm -f /usr/bin/mimic; rm -rf /usr/src/mimic ;;
   esac
   if [ "$INIT" = systemd ]; then
+    systemctl disable --now "mimic@$IFACE" "faketcp@$IFACE" 2>/dev/null
     rm -f /etc/systemd/system/faketcp@.service
+    rm -rf /etc/systemd/system/mimic@.service.d
     systemctl daemon-reload 2>/dev/null
   fi
   rm -f /etc/init.d/faketcp
