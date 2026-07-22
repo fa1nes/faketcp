@@ -192,14 +192,13 @@ install_deb() {
   info "获取官方 Release ..."
   json="$(dl "$API")" || die "获取 Release 失败"
   urls="$(printf '%s\n' "$json" | grep -o 'https://[^"]*\.deb')"
-  cli="$(printf  '%s\n' "$urls" | grep -E "/${cn}_mimic_[0-9][^\"]*_${ARCH}\.deb$"       | head -1)"
-  dkms="$(printf '%s\n' "$urls" | grep -E "/${cn}_mimic-dkms_[0-9][^\"]*_${ARCH}\.deb$" | head -1)"
-  [ -n "$cli" ] && [ -n "$dkms" ] || die "未找到匹配 $cn/$ARCH 的官方 deb 包"
+  # 仅装 CLI，不装 mimic-dkms（内核模块只用于校验和补丁，最省性能、不随内核重编译）
+  cli="$(printf '%s\n' "$urls" | grep -E "/${cn}_mimic_[0-9][^\"]*_${ARCH}\.deb$" | head -1)"
+  [ -n "$cli" ] || die "未找到匹配 $cn/$ARCH 的官方 deb 包"
   td="$(mktemp -d)"
-  info "下载 $(basename "$cli") 与 dkms 包 ..."
-  dlo "$cli" "$td/mimic.deb" && dlo "$dkms" "$td/mimic-dkms.deb" || { rm -rf "$td"; die "下载失败"; }
-  apt-get update -y
-  apt-get install -y "$td/mimic.deb" "$td/mimic-dkms.deb" || { rm -rf "$td"; die "安装失败"; }
+  info "下载 $(basename "$cli") ..."
+  dlo "$cli" "$td/mimic.deb" || { rm -rf "$td"; die "下载失败"; }
+  apt-get install -y "$td/mimic.deb" || { rm -rf "$td"; die "安装失败"; }
   rm -rf "$td"
 }
 
@@ -319,12 +318,19 @@ do_uninstall() {
 menu() {
   while :; do
     echo
-    printf "%s%s========= mimic-manager (%s/%s, %s) =========%s\n" \
-      "$B" "$BLU" "$ID" "$ARCH" "$INIT" "$R"
-    printf "  %s1%s) 安装         %s2%s) 配置服务端   %s3%s) 配置客户端\n" "$GRN" "$R" "$GRN" "$R" "$GRN" "$R"
-    printf "  %s4%s) 查看配置     %s5%s) 启动         %s6%s) 停止\n"     "$CYN" "$R" "$GRN" "$R" "$YLW" "$R"
-    printf "  %s7%s) 重启         %s8%s) 状态         %s9%s) 更新\n"     "$YLW" "$R" "$CYN" "$R" "$MAG" "$R"
-    printf " %s10%s) 完全卸载     %s0%s) 退出\n"                          "$RED" "$R" "$GRY" "$R"
+    printf "%s%s===== mimic-manager =====%s\n" "$B" "$BLU" "$R"
+    printf "%s系统: %s/%s  服务: %s%s\n\n" "$GRY" "$ID" "$ARCH" "$INIT" "$R"
+    printf "  %s1%s) 安装\n"       "$GRN" "$R"
+    printf "  %s2%s) 配置服务端\n" "$GRN" "$R"
+    printf "  %s3%s) 配置客户端\n" "$GRN" "$R"
+    printf "  %s4%s) 查看配置\n"   "$CYN" "$R"
+    printf "  %s5%s) 启动\n"       "$GRN" "$R"
+    printf "  %s6%s) 停止\n"       "$YLW" "$R"
+    printf "  %s7%s) 重启\n"       "$YLW" "$R"
+    printf "  %s8%s) 状态\n"       "$CYN" "$R"
+    printf "  %s9%s) 更新\n"       "$MAG" "$R"
+    printf " %s10%s) 完全卸载\n"   "$RED" "$R"
+    printf "  %s0%s) 退出\n"       "$GRY" "$R"
     printf "%s请选择: %s" "$B" "$R"; read -r n
     case "$n" in
       1) do_install ;;
