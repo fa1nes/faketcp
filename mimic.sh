@@ -19,7 +19,7 @@ fi
 ok()   { printf "%s✓ %s%s\n"  "$GRN" "$*" "$R"; }
 info() { printf "%s» %s%s\n"  "$CYN" "$*" "$R"; }
 warn() { printf "%s! %s%s\n"  "$YLW" "$*" "$R"; }
-head() { printf "%s%s── %s ──%s\n" "$B" "$MAG" "$*" "$R"; }
+sect() { printf "%s%s── %s ──%s\n" "$B" "$MAG" "$*" "$R"; }
 
 # ---------- 基础工具 ----------
 die() { printf "%s✗ 错误: %s%s\n" "$RED" "$*" "$R" >&2; exit 1; }
@@ -258,7 +258,7 @@ cfg_client() {
   echo "$IFACE" > "$CFGDIR/iface"
   touch "$CFGDIR/client.list"
   while :; do
-    head "客户端远端管理"
+    sect "客户端远端管理"
     printf "  %s1%s) 添加   %s2%s) 查看   %s3%s) 删除   %s0%s) 返回\n" \
       "$GRN" "$R" "$GRN" "$R" "$GRN" "$R" "$YLW" "$R"
     printf "%s选择: %s" "$B" "$R"; read -r c
@@ -279,11 +279,11 @@ cfg_client() {
 view_cfg() {
   printf "系统: %s%s%s  架构: %s%s%s  网卡: %s%s%s  服务: %s%s%s\n" \
     "$CYN" "$ID" "$R" "$CYN" "$ARCH" "$R" "$CYN" "$IFACE" "$R" "$CYN" "$INIT" "$R"
-  head "服务端过滤器 ($CFGDIR/server.filters)"
+  sect "服务端过滤器 ($CFGDIR/server.filters)"
   [ -s "$CFGDIR/server.filters" ] && cat "$CFGDIR/server.filters" || echo "（无）"
-  head "客户端远端 ($CFGDIR/client.list)"
+  sect "客户端远端 ($CFGDIR/client.list)"
   [ -s "$CFGDIR/client.list" ] && cat -n "$CFGDIR/client.list" || echo "（无）"
-  head "生成的配置 ($CFGDIR/$IFACE.conf)"
+  sect "生成的配置 ($CFGDIR/$IFACE.conf)"
   [ -f "$CFGDIR/$IFACE.conf" ] && cat "$CFGDIR/$IFACE.conf" || echo "（未生成）"
 }
 
