@@ -190,21 +190,28 @@ install_entry() {
 
 install_deb() {
   cn="$VERSION_CODENAME"
-  info "下载官方 deb（mimic + mimic-dkms，kfunc 满速）..."
+  info "获取官方 Release ..."
   j=/tmp/mimic-rel.json
-  dlgh "https://api.github.com/repos/hack3ric/mimic/releases/latest" "$j" || die "获取 Release 失败"
+  dlo "https://api.github.com/repos/hack3ric/mimic/releases/latest" "$j" 2>/dev/null \
+    || die "获取 Release 失败（api.github.com 不通）"
   u="$(grep -o 'https://[^"]*\.deb' "$j")"; rm -f "$j"
   cli="$(printf  '%s\n' "$u" | grep -E "/${cn}_mimic_[0-9][^\"]*_${ARCH}\.deb$"       | head -1)"
   dkms="$(printf '%s\n' "$u" | grep -E "/${cn}_mimic-dkms_[0-9][^\"]*_${ARCH}\.deb$" | head -1)"
   [ -n "$cli" ] && [ -n "$dkms" ] || die "未找到匹配 $cn/$ARCH 的官方 deb（仅 bookworm/trixie/noble amd64/arm64）"
   td="$(mktemp -d)"
+  info "下载官方 deb（mimic + mimic-dkms，kfunc 满速）..."
   dlgh "$cli" "$td/a.deb" && dlgh "$dkms" "$td/b.deb" || { rm -rf "$td"; die "下载失败"; }
-  apt-get update -y
-  apt-get install -y "$td/a.deb" "$td/b.deb" \
-    || { rm -rf "$td"; die "安装失败：DKMS 需内核头（Proxmox 先装 pve-headers-$(uname -r)）"; }
+  info "安装当前内核头（DKMS 只为运行内核编译）..."
+  apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" >/dev/null 2>&1 \
+    || apt-get install -y --no-install-recommends "pve-headers-$(uname -r)" >/dev/null 2>&1 \
+    || apt-get install -y --no-install-recommends "proxmox-headers-$(uname -r)" >/dev/null 2>&1 \
+    || warn "未找到当前内核头（$(uname -r)），DKMS 可能失败"
+  info "安装官方 deb（--no-install-recommends 避免拉入无关内核）..."
+  apt-get install -y --no-install-recommends "$td/a.deb" "$td/b.deb" \
+    || { rm -rf "$td"; die "安装失败，见上方 DKMS 日志"; }
   rm -rf "$td"
   echo mimic > /etc/modules-load.d/mimic.conf
-  modprobe mimic 2>/dev/null && ok "mimic 内核模块已加载（kfunc 满速）" || warn "模块未加载，检查 DKMS 编译日志"
+  modprobe mimic 2>/dev/null && ok "mimic 内核模块已加载（kfunc 满速）" || warn "模块未加载，检查 DKMS 日志"
 }
 
 install_alpine() {
