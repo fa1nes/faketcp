@@ -11,6 +11,10 @@ on:
         description: "mimic 上游分支或 tag（留空=自动取最新 tag）"
         default: ""
         required: false
+      force:
+        description: "强制重编（即使版本未变）"
+        default: "false"
+        required: false
   schedule:
     - cron: "0 4 * * *"
 
@@ -23,14 +27,26 @@ jobs:
     steps:
       - name: resolve upstream version
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           REF="${{ github.event.inputs.ref }}"
           [ -n "$REF" ] || REF="$(git ls-remote --tags --refs --sort=-v:refname \
             https://github.com/hack3ric/mimic 'v*' | head -n1 | sed 's#.*/##')"
           [ -n "$REF" ] || REF="master"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          SKIP=false
+          if [ "${{ github.event.inputs.force }}" != "true" ]; then
+            CUR="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/alpine" \
+              2>/dev/null | grep -o '"name": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
+            [ "$CUR" = "alpine $REF" ] && SKIP=true
+          fi
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF skip=$SKIP"
 
       - name: build in alpine container
+        if: steps.ver.outputs.skip != 'true'
         env:
           REF: ${{ steps.ver.outputs.ref }}
         run: |
@@ -48,6 +64,7 @@ jobs:
           '
 
       - name: publish to alpine release
+        if: steps.ver.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: alpine
