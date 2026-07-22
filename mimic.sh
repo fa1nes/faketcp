@@ -237,8 +237,11 @@ install_owrt() {
 
 install_kmod_deb() {
   info "编译内核模块（校验和补丁，满速）..."
-  apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" build-essential git >/dev/null 2>&1 \
-    || { warn "内核头不可用（Proxmox 需自装 pve-headers），跳过模块，走 ethtool 降速方案"; return; }
+  apt-get install -y --no-install-recommends build-essential git >/dev/null 2>&1 || true
+  apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" >/dev/null 2>&1 \
+    || apt-get install -y --no-install-recommends "pve-headers-$(uname -r)" >/dev/null 2>&1 \
+    || apt-get install -y --no-install-recommends "proxmox-headers-$(uname -r)" >/dev/null 2>&1 \
+    || { warn "内核头不可用（Proxmox 需先加 PVE 源），跳过模块，走 ethtool 降速方案"; return; }
   rm -rf /usr/src/mimic-kmod
   git clone --depth 1 "$REPO" /usr/src/mimic-kmod >/dev/null 2>&1 || { warn "克隆失败，跳过模块"; return; }
   if make -C /usr/src/mimic-kmod/kmod KERNEL_UNAME="$(uname -r)" CHECKSUM_HACK=kprobe >/dev/null 2>&1; then
