@@ -58,11 +58,8 @@ IFACE="$(cat "$CFGDIR/iface" 2>/dev/null || default_iface)"
 
 mkdir -p "$CFGDIR"
 
-pubip() {
-  for u in "https://ipv$1.icanhazip.com" "https://api$([ "$1" = 6 ] && echo 64).ipify.org"; do
-    v="$(dlf "$1" "$u")"; [ -n "$v" ] && { echo "$v" | tr -d '\r\n'; return; }
-  done
-  ip -"$1" -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
+ifip() {
+  ip -"$1" -o addr show scope global dev "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
 }
 
 fmt() {
@@ -123,6 +120,7 @@ IFACE="$(cat /etc/mimic/iface 2>/dev/null)"
 supervisor="supervise-daemon"
 command="/usr/bin/mimic"
 command_args="run -F /etc/mimic/${IFACE}.conf ${IFACE}"
+supervise_daemon_args="--stdout /var/log/faketcp.log --stderr /var/log/faketcp.log"
 respawn_delay=3
 pidfile="/run/faketcp.pid"
 start_pre() { modprobe mimic 2>/dev/null; return 0; }
@@ -139,6 +137,8 @@ start_service() {
   procd_open_instance
   procd_set_param command /usr/bin/mimic run -F "/etc/mimic/${iface}.conf" "${iface}"
   procd_set_param respawn
+  procd_set_param stdout 1
+  procd_set_param stderr 1
   procd_close_instance
 }
 EOF
@@ -153,7 +153,7 @@ svc() {
         start)   systemctl enable --now "faketcp@$IFACE" ;;
         stop)    systemctl stop "faketcp@$IFACE" ;;
         restart) systemctl restart "faketcp@$IFACE" ;;
-        status)  systemctl status "faketcp@$IFACE" ;;
+        status)  systemctl --no-pager status "faketcp@$IFACE"; echo; sect "最近日志"; journalctl -u "faketcp@$IFACE" -n 30 --no-pager 2>/dev/null ;;
         disable) systemctl disable --now "faketcp@$IFACE" 2>/dev/null ;;
       esac ;;
     openrc)
@@ -161,7 +161,7 @@ svc() {
         start)   rc-update add faketcp default 2>/dev/null; rc-service faketcp start ;;
         stop)    rc-service faketcp stop ;;
         restart) rc-service faketcp restart ;;
-        status)  rc-service faketcp status ;;
+        status)  rc-service faketcp status; echo; sect "最近日志"; tail -n 30 /var/log/faketcp.log 2>/dev/null || echo "（暂无日志）" ;;
         disable) rc-update del faketcp default 2>/dev/null; rc-service faketcp stop 2>/dev/null ;;
       esac ;;
     procd)
@@ -169,7 +169,7 @@ svc() {
         start)   /etc/init.d/faketcp enable; /etc/init.d/faketcp start ;;
         stop)    /etc/init.d/faketcp stop ;;
         restart) /etc/init.d/faketcp restart ;;
-        status)  /etc/init.d/faketcp status 2>/dev/null || pgrep -a mimic || echo "未运行" ;;
+        status)  { /etc/init.d/faketcp status 2>/dev/null || pgrep -a mimic || echo "未运行"; }; echo; sect "最近日志"; logread 2>/dev/null | grep -i mimic | tail -n 30 || echo "（暂无日志）" ;;
         disable) /etc/init.d/faketcp disable 2>/dev/null; /etc/init.d/faketcp stop 2>/dev/null ;;
       esac ;;
   esac
@@ -214,7 +214,7 @@ install_alpine() {
   info "克隆并编译源码 ..."
   rm -rf /usr/src/mimic
   git clone --depth 1 "$REPO" /usr/src/mimic || die "克隆失败"
-  make -C /usr/src/mimic build-cli CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1 || die "编译失败"
+  make -C /usr/src/mimic build-cli CHECKSUM_HACK=kprobe || die "编译失败"
   install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic || die "未找到编译产物 out/mimic"
 }
 
@@ -256,12 +256,11 @@ gen_server_filters() {
 cfg_server() {
   echo "$IFACE" > "$CFGDIR/iface"
   touch "$CFGDIR/server.ports"
-  info "正在获取公网 IP ..."
-  p4="$(pubip 4)"; p6="$(pubip 6)"
+  p4="$(ifip 4)"; p6="$(ifip 6)"
   while :; do
     cls
     sect "服务端端口管理（自动 IPv4/IPv6 双栈）"
-    printf "  IPv4: %s%s%s   IPv6: %s%s%s\n\n" "$GRN" "${p4:-无}" "$R" "$GRN" "${p6:-无}" "$R"
+    printf "  网卡 %s IPv4: %s%s%s  IPv6: %s%s%s\n\n" "$IFACE" "$GRN" "${p4:-无}" "$R" "$GRN" "${p6:-无}" "$R"
     printf "  %s1%s) 添加端口\n" "$GRN" "$R"
     printf "  %s2%s) 查看端口\n" "$GRN" "$R"
     printf "  %s3%s) 删除端口\n" "$GRN" "$R"

@@ -52,7 +52,7 @@ jobs:
             for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done; export PATH
             command -v llvm-strip
             git clone --depth 1 -b "$REF" https://github.com/hack3ric/mimic src
-            make -C src build-cli CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1
+            make -C src build-cli CHECKSUM_HACK=kprobe
             cp src/out/mimic "mimic-alpine-$(uname -m)"
             ls -la "mimic-alpine-$(uname -m)"
           '
