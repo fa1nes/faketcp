@@ -247,6 +247,7 @@ do_install() {
 
 auto_update() {
   [ -x /usr/bin/mimic ] || return
+  write_service
   u="$(bin_url)"; [ -n "$u" ] || return
   info "检查更新 ..."
   tmp="/usr/bin/.mimic.new"
