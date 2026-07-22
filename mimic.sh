@@ -44,6 +44,13 @@ install_bin() {
   mv -f "$tmp" /usr/bin/mimic
 }
 
+fetch_src() {
+  rm -rf "$1"; mkdir -p "$1"
+  dlgh "$REPO/archive/refs/heads/master.tar.gz" /tmp/mimic-src.tgz \
+    && tar -xzf /tmp/mimic-src.tgz -C "$1" --strip-components=1
+  r=$?; rm -f /tmp/mimic-src.tgz; return $r
+}
+
 . /etc/os-release 2>/dev/null || die "无法读取 /etc/os-release"
 case "$ID" in
   debian|ubuntu)        PKG=deb;    INIT=systemd ;;
@@ -221,20 +228,49 @@ install_deb() {
     || warn "模块未加载（无匹配 $(uname -r) 内核头），将用 ethtool 兜底"
 }
 
+alpine_build_local() {
+  info "本地编译官方 kfunc（二进制 + 内核模块）..."
+  fl="$(uname -r | sed 's/.*-//')"
+  apk add --no-cache git make clang gcc pahole bpftool linux-headers elfutils-dev \
+    libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev bubblewrap \
+    "linux-${fl}-dev" >/dev/null 2>&1 || { warn "编译依赖安装失败"; return 1; }
+  apk add --no-cache llvm >/dev/null 2>&1 \
+    || apk add --no-cache "$(apk search -q '^llvm[0-9]*$' | sort -V | tail -n1)" >/dev/null 2>&1 || true
+  for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done; export PATH
+  fetch_src /usr/src/mimic || { warn "源码下载失败"; return 1; }
+  if make -C /usr/src/mimic KERNEL_UNAME="$(uname -r)" >/dev/null 2>&1 && [ -s /usr/src/mimic/out/mimic.ko ]; then
+    rm -f /usr/bin/mimic; install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic
+    install -Dm644 /usr/src/mimic/out/mimic.ko "/lib/modules/$(uname -r)/extra/mimic.ko"
+    depmod 2>/dev/null
+    modprobe mimic 2>/dev/null && ok "官方 kfunc 已安装（模块满速）" || warn "模块加载失败，走 ethtool 兜底"
+    return 0
+  fi
+  warn "kfunc 模块编译失败，改用 kprobe 二进制 + ethtool（软算校验和，仍快）"
+  sed -i "s/if (padding_len > 0)/if (0)/" /usr/src/mimic/bpf/egress.c 2>/dev/null
+  make -C /usr/src/mimic build-cli CHECKSUM_HACK=kprobe >/dev/null 2>&1 && [ -s /usr/src/mimic/out/mimic ] \
+    || { warn "kprobe 编译也失败"; return 1; }
+  rm -f /usr/bin/mimic; install -m755 /usr/src/mimic/out/mimic /usr/bin/mimic
+  ok "已安装 kprobe 二进制（ethtool 兜底）"
+}
+
 install_alpine() {
   am="$(uname -m)"
-  info "下载官方 kfunc 二进制 ..."
-  install_bin "$REL/alpine/mimic-alpine-$am" || die "下载失败，请先在 Actions 运行 build-alpine-mimic 生成"
   apk add --no-cache libbpf libxdp libffi ethtool >/dev/null 2>&1 || true
-  info "下载匹配内核的 kfunc 模块 ..."
-  km="/lib/modules/$(uname -r)/extra/mimic.ko"
-  mkdir -p "$(dirname "$km")"
+  avail="$(df -k / 2>/dev/null | awk 'NR==2{print int($4/1024)}')"
+  if [ "${avail:-9999}" -ge 2000 ]; then
+    alpine_build_local && return
+    warn "本地编译不可用，回退 CI 预编译"
+  else
+    info "磁盘不足（${avail}MB），使用 CI 预编译 ..."
+  fi
+  install_bin "$REL/alpine/mimic-alpine-$am" || die "下载失败，请先在 Actions 运行 build-alpine-mimic"
+  km="/lib/modules/$(uname -r)/extra/mimic.ko"; mkdir -p "$(dirname "$km")"
   if dlgh "$REL/alpine/mimic-$(uname -r).ko" "$km" && [ -s "$km" ]; then
     depmod 2>/dev/null
-    modprobe mimic 2>/dev/null && ok "kfunc 模块已加载（满速）" || warn "模块加载失败"
+    modprobe mimic 2>/dev/null && ok "kfunc 模块已加载（满速）" || warn "模块加载失败，走 ethtool 兜底"
   else
     rm -f "$km"
-    warn "无匹配 $(uname -r) 的模块，请 apk upgrade+reboot 到最新内核并重跑 CI；暂用 ethtool 兜底"
+    warn "无匹配 $(uname -r) 的模块（apk upgrade+reboot 到最新内核可匹配 CI）；暂用 ethtool 兜底"
   fi
 }
 
