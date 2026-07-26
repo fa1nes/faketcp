@@ -1,69 +1,104 @@
 name: build-openwrt-mimic
 
+# 直接复用上游 openwrt 分支的 net/mimic/Makefile 走官方 OpenWrt SDK 构建。
+# 这样才能拿到上游认可的全套编译参数：
+#   CHECKSUM_HACK=kprobe  —— OpenWrt 内核既无 BTF 也无 kprobe 配置
+#   STRIP_BTF_EXT=1       —— 去掉 .BTF.ext，否则 libbpf 加载时要求内核 BTF
+#   COMPAT_LINUX_6_6=1    —— OpenWrt 24.10 是 6.6 内核
+#   USE_LIBXDP=0          —— OpenWrt 不需要 libxdp
+#   RUNTIME_DIR=/var/run/mimic
+# 同时用 SDK 做真正的交叉编译，覆盖 aarch64 / armv7 / mipsel，
+# 而不是在 x86 runner 上编出只能跑在 x86 的产物。
+
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "mimic upstream branch or tag (empty = latest tag)"
-        default: ""
-        required: false
-      force:
-        description: "force rebuild even if version unchanged"
-        default: "false"
+        description: "上游打包分支 ref"
+        default: "openwrt"
         required: false
   schedule:
-    - cron: "20 4 * * *"
+    - cron: "23 4 * * *"
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.arch }} / ${{ matrix.revision }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - x86_64
+          - aarch64_generic
+          - arm_cortex-a7
+          - mipsel_24kc
+        revision:
+          - openwrt-24.10
     steps:
-      - name: resolve upstream version
-        id: ver
+      - name: 取上游 OpenWrt 打包分支
+        uses: actions/checkout@v4
+        with:
+          repository: hack3ric/mimic
+          ref: ${{ github.event.inputs.ref || 'openwrt' }}
+          fetch-depth: 0
+
+      - name: OpenWrt SDK 构建
+        uses: openwrt/gh-action-sdk@main
         env:
-          GH_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}-${{ matrix.revision }}
+          PACKAGES: mimic
+          V: s
+
+      - name: 规范化产物名
         run: |
-          REF="${{ github.event.inputs.ref }}"
-          [ -n "$REF" ] || REF="$(git ls-remote --tags --refs --sort=-v:refname \
-            https://github.com/hack3ric/mimic 'v*' | head -n1 | sed 's#.*/##')"
-          [ -n "$REF" ] || REF="master"
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          SKIP=false
-          if [ "${{ github.event.inputs.force }}" != "true" ]; then
-            CUR="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/tags/openwrt" \
-              2>/dev/null | grep -o '"name": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
-            [ "$CUR" = "openwrt $REF" ] && SKIP=true
+          set -eu
+          mkdir -p dist
+          pkg="$(find bin \( -name 'mimic_*.ipk' -o -name 'mimic-*.apk' \) | head -1)"
+          [ -n "$pkg" ] || { echo "SDK 未产出 mimic 包"; find bin -type f | head -50; exit 1; }
+          ext="${pkg##*.}"
+          cp "$pkg" "dist/mimic-openwrt-${{ matrix.arch }}.$ext"
+
+          # 额外抽出裸二进制，供管理脚本在包安装失败时做最后一级回退
+          tmp="$(mktemp -d)"
+          abs="$(readlink -f "$pkg")"
+          if [ "$ext" = ipk ]; then
+            ( cd "$tmp" && ar x "$abs" && tar xzf data.tar.gz )
+          else
+            ( cd "$tmp" && tar xzf "$abs" )
           fi
-          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          if [ -f "$tmp/usr/bin/mimic" ]; then
+            cp "$tmp/usr/bin/mimic" "dist/mimic-openwrt-${{ matrix.arch }}"
+          else
+            echo "警告：包内未找到 usr/bin/mimic"; find "$tmp" -type f | head -20
+          fi
+          ls -la dist
 
-      - name: build static musl binary
-        if: steps.ver.outputs.skip != 'true'
-        env:
-          REF: ${{ steps.ver.outputs.ref }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ matrix.arch }}-${{ matrix.revision }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: 汇总
         run: |
-          docker run --rm -e REF -v "$PWD":/w -w /w alpine:latest sh -ec '
-            apk add --no-cache git make clang gcc pahole bpftool linux-headers file \
-              elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev pkgconf musl-dev \
-              zlib-static zstd-static
-            apk add --no-cache llvm || apk add --no-cache "$(apk search -q "^llvm[0-9]*$" | sort -V | tail -n1)"
-            for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done; export PATH
-            command -v llvm-strip
-            git clone --depth 1 -b "$REF" https://github.com/hack3ric/mimic src
-            sed -i "s/if (padding_len > 0)/if (0)/" src/bpf/egress.c
-            make -C src build-cli CHECKSUM_HACK=kprobe STATIC=1
-            file src/out/mimic
-            cp src/out/mimic "mimic-openwrt-$(uname -m)"
-            ls -la "mimic-openwrt-$(uname -m)"
-          '
-
-      - name: publish to openwrt release
-        if: steps.ver.outputs.skip != 'true'
-        uses: softprops/action-gh-release@v2
+          set -eu
+          mkdir -p out
+          find dl -type f -exec cp -f {} out/ \;
+          ls -la out
+          [ -n "$(ls -A out)" ] || { echo "没有任何产物"; exit 1; }
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: openwrt
-          name: openwrt ${{ steps.ver.outputs.ref }}
-          files: mimic-openwrt-*
+          name: openwrt
+          files: out/*

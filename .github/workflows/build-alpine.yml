@@ -1,49 +1,88 @@
 name: build-alpine-mimic
 
+# 兜底二进制：管理脚本在 Alpine 上优先本地编译（能同时产出 kfunc 内核模块），
+# 只有磁盘不足或编译失败时才回退到这里的产物。
+#
+# 关键编译参数：
+#   CHECKSUM_HACK=kprobe   预编译产物没有配套内核模块，只能走 kprobe
+#   STRIP_BTF_EXT=1        与 kprobe 配套，见官方 docs/checksum-hacks.md
+#   STATIC=1               musl 全静态没有 NSS 问题（glibc 才有），
+#                          静态化可彻底摆脱目标机 libbpf/libxdp 版本差异
+#
+# 【已移除】旧版本这里还会为 lts/virt 内核编译 mimic.ko 并发布。那条路径
+# 一直被 `|| true` 吞掉失败、从未真正产出过 .ko，而且即便产出也只在目标机
+# 内核版本与 CI 完全一致时才可用。kfunc 模块交给脚本本地编译更可靠。
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 4 * * *"
+    - cron: "3 4 * * *"
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: alpine ${{ matrix.uarch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            uarch: x86_64
+          - platform: linux/arm64
+            uarch: aarch64
+          - platform: linux/arm/v7
+            uarch: armv7
     steps:
-      - name: build kfunc binary and modules (lts and virt)
-        run: |
-          mkdir -p out
-          for fl in lts virt; do
-            docker run --rm -e FL="$fl" -v "$PWD/out":/out alpine:latest sh -ec '
-              apk add --no-cache git make clang gcc pahole bpftool linux-headers \
-                elfutils-dev elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev \
-                pkgconf musl-dev bubblewrap linux-${FL} linux-${FL}-dev
-              apk add --no-cache llvm || apk add --no-cache "$(apk search -q "^llvm[0-9]*$" | sort -V | tail -n1)"
-              for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done; export PATH
-              KVER="$(ls /lib/modules | grep -- "-${FL}" | head -n1)"
-              [ -n "$KVER" ] || exit 0
-              KB="/lib/modules/$KVER/build"
-              git clone --depth 1 https://github.com/hack3ric/mimic src
-              make -C src build-cli build-tools
-              cp src/out/mimic "/out/mimic-alpine-$(uname -m)"
-              [ -x "$KB/tools/bpf/resolve_btfids/resolve_btfids" ] \
-                || make -C "$KB/tools/bpf/resolve_btfids" 2>/dev/null || true
-              RB="$KB/tools/bpf/resolve_btfids/resolve_btfids"
-              if BOOT_DIR=/boot make -C src build-kmod KERNEL_UNAME="$KVER" VMLINUX_SUFFIX="-${FL}" RESOLVE_BTFIDS="$RB"; then
-                cp src/out/mimic.ko "/out/mimic-${KVER}.ko"
-                echo "built module /out/mimic-${KVER}.ko"
-              else
-                echo "kmod build FAILED for $KVER"
-              fi
-            ' || true
-          done
-          ls -la out
-          ls out/mimic-alpine-* >/dev/null 2>&1 || { echo "no binary built"; exit 1; }
+      - uses: docker/setup-qemu-action@v3
 
-      - name: publish to alpine release
-        uses: softprops/action-gh-release@v2
+      - name: 构建
+        run: |
+          set -eu
+          mkdir -p dist
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -e ONAME="${{ matrix.uarch }}" -v "$PWD/dist":/dist \
+            alpine:latest sh -ec '
+              apk add --no-cache git make clang gcc pahole bpftool linux-headers file \
+                elfutils-dev libbpf-dev libffi-dev argp-standalone libxdp-dev \
+                pkgconf musl-dev zlib-static zstd-static
+              apk add --no-cache llvm \
+                || apk add --no-cache "$(apk search -q "^llvm[0-9]*$" | sort -V | tail -n1)"
+              for d in /usr/lib/llvm*/bin; do PATH="$d:$PATH"; done
+              export PATH
+              command -v llvm-strip
+              git clone --depth 1 https://github.com/hack3ric/mimic src
+              make -C src build-cli MODE=release \
+                CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1 STATIC=1
+              file src/out/mimic
+              install -m755 src/out/mimic "/dist/mimic-alpine-$ONAME"
+            '
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alpine-${{ matrix.uarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: 汇总
+        run: |
+          set -eu
+          mkdir -p out
+          find dl -type f -exec cp -f {} out/ \;
+          ls -la out
+          [ -n "$(ls -A out)" ] || { echo "没有任何产物"; exit 1; }
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: alpine
           name: alpine

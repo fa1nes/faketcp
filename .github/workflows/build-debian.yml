@@ -1,33 +1,89 @@
 name: build-debian-mimic
 
+# 兜底二进制：只在官方 release 覆盖不到时使用
+# （官方只出 bookworm/trixie/noble × amd64/arm64 的 deb）。
+#
+# 关键编译参数：
+#   CHECKSUM_HACK=kprobe   无内核模块时的校验和 hack
+#   STRIP_BTF_EXT=1        官方 docs/checksum-hacks.md 明确要求与 kprobe 配套，
+#                          否则 BPF 对象保留 .BTF.ext，加载时要求内核 BTF
+#   STATIC_EXCEPT_LIBC=1   静态链 libbpf/libelf/zstd/z，解决跨发行版 ABI 不一致；
+#                          ★ 绝对不能用全静态 STATIC=1：mimic 用 getaddrinfo
+#                            解析 filter 里的域名，全静态 glibc 会让 NSS 失效
+#
+# 多架构靠 QEMU；容器内的 uname -m 会如实反映目标架构，但产物名统一用
+# matrix.uarch，以匹配管理脚本里的架构归一化结果（armv7l → armv7）。
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: "10 4 * * *"
+    - cron: "13 4 * * *"
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: debian ${{ matrix.uarch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            uarch: x86_64
+          - platform: linux/arm64
+            uarch: aarch64
+          - platform: linux/arm/v7
+            uarch: armv7
     steps:
-      - name: build kprobe binary (glibc)
-        run: |
-          docker run --rm -v "$PWD":/w -w /w debian:bookworm bash -ec '
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update
-            apt-get install -y --no-install-recommends git make clang gcc pkg-config \
-              libbpf-dev libelf-dev zlib1g-dev libxdp-dev bpftool dwarves libffi-dev ca-certificates
-            git clone --depth 1 https://github.com/hack3ric/mimic src
-            sed -i "s/if (padding_len > 0)/if (0)/" src/bpf/egress.c
-            make -C src build-cli CHECKSUM_HACK=kprobe
-            cp src/out/mimic "mimic-debian-$(uname -m)"
-          '
+      - uses: docker/setup-qemu-action@v3
 
-      - name: publish to debian release
-        uses: softprops/action-gh-release@v2
+      - name: 构建
+        run: |
+          set -eu
+          mkdir -p dist
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -e ONAME="${{ matrix.uarch }}" -v "$PWD/dist":/dist \
+            debian:bookworm bash -ec '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                git make clang gcc pkg-config ca-certificates file \
+                libbpf-dev libelf-dev zlib1g-dev libzstd-dev libxdp-dev \
+                libffi-dev bpftool dwarves
+              git clone --depth 1 https://github.com/hack3ric/mimic src
+              make -C src build-cli MODE=release \
+                CHECKSUM_HACK=kprobe STRIP_BTF_EXT=1 STATIC_EXCEPT_LIBC=1
+              file src/out/mimic
+              ldd src/out/mimic || true
+              install -m755 src/out/mimic "/dist/mimic-debian-$ONAME"
+            '
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-${{ matrix.uarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: 汇总
+        run: |
+          set -eu
+          mkdir -p out
+          find dl -type f -exec cp -f {} out/ \;
+          ls -la out
+          [ -n "$(ls -A out)" ] || { echo "没有任何产物"; exit 1; }
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: debian
           name: debian
-          files: mimic-debian-*
+          files: out/*
